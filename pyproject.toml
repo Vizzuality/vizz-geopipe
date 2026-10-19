@@ -1,0 +1,50 @@
+[project]
+name = "vizz-geopipe"
+version = "0.1.0"
+description = "Download, transform and publish map-ready geospatial data with GDAL"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Vizzuality" }]
+requires-python = ">=3.12,<3.14"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.0",
+    "pytest>=8.3.0",
+    "ruff>=0.14.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vizz_geopipe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gdal: runs the real gdal command (needs GDAL 3.13 or newer on PATH)"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+select = [
+    "UP",  # pyupgrade
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "N",   # naming conventions
+    "I",   # isort
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[project.scripts]
+geopipe = "vizz_geopipe.cli:main"

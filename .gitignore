@@ -1,0 +1,14 @@
+# Personal learning material (its own private repo)
+learning/
+
+# Superpowers specs and plans (local working documents)
+docs/superpowers/
+
+# Python bytecode
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Superpowers execution workspace
+.superpowers/
