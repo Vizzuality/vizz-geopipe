@@ -4,6 +4,9 @@ learning/
 # Superpowers specs and plans (local working documents)
 docs/superpowers/
 
+# Codebase documentation (local working document for now)
+docs/codebase/
+
 # Python bytecode
 __pycache__/
 
