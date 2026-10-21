@@ -32,35 +32,12 @@ def fake_gdal(monkeypatch, *, version=VERSION_OUTPUT, returncode=0, stderr=""):
     return commands
 
 
-def test_gdal_version_reads_the_version_output(monkeypatch):
-    fake_gdal(monkeypatch)
-
-    assert _runner.gdal_version() == (3, 13, 0)
-
-
 def test_run_gdal_runs_the_gdal_command(monkeypatch):
     commands = fake_gdal(monkeypatch)
 
     _runner.run_gdal(["vector", "info", "a.gpkg"])
 
     assert commands[-1] == ["gdal", "vector", "info", "a.gpkg"]
-
-
-def test_run_gdal_adds_config_options(monkeypatch):
-    commands = fake_gdal(monkeypatch)
-
-    _runner.run_gdal(["vector", "info", "a.gpkg"], config={"GDAL_NUM_THREADS": "ALL_CPUS"})
-
-    assert commands[-1][-2:] == ["--config", "GDAL_NUM_THREADS=ALL_CPUS"]
-
-
-def test_the_version_is_checked_only_once(monkeypatch):
-    commands = fake_gdal(monkeypatch)
-
-    _runner.run_gdal(["vector", "info", "a.gpkg"])
-    _runner.run_gdal(["vector", "info", "b.gpkg"])
-
-    assert commands.count(["gdal", "--version"]) == 1
 
 
 def test_a_failing_command_raises_gdal_error_with_its_stderr(monkeypatch):

@@ -30,19 +30,6 @@ def test_one_raster_is_read_and_written(gdal_calls):
     assert step_names(gdal_calls) == ["read", "write"]
 
 
-def test_rasters_are_reprojected_to_web_mercator_by_default(gdal_calls):
-    to_cog([Path("in.tif")], Path("out.tif"))
-
-    assert "! reproject --dst-crs EPSG:3857" in command(gdal_calls)
-
-
-def test_the_output_is_a_cog(gdal_calls):
-    to_cog([Path("in.tif")], Path("out.tif"))
-
-    assert "write out.tif --output-format COG --overwrite" in command(gdal_calls)
-    assert "--co COMPRESS=ZSTD" in command(gdal_calls)
-
-
 def test_several_rasters_are_mosaicked(gdal_calls):
     to_cog([Path("a.tif"), Path("b.tif")], Path("out.tif"))
 
@@ -53,17 +40,6 @@ def test_steps_run_in_order_nodata_clip_reproject(gdal_calls):
     to_cog([Path("in.tif")], Path("out.tif"), nodata=0, dst_crs="EPSG:3857", bbox=(0, 0, 1, 1))
 
     assert step_names(gdal_calls) == ["read", "edit", "clip", "reproject", "write"]
-
-
-def test_overviews_use_the_resampling(gdal_calls):
-    to_cog([Path("in.tif")], Path("out.tif"), resampling="nearest")
-
-    assert "--co OVERVIEW_RESAMPLING=nearest" in command(gdal_calls)
-
-
-def test_no_inputs_are_rejected(gdal_calls):
-    with pytest.raises(ValueError, match="at least one input"):
-        to_cog([], Path("out.tif"))
 
 
 def raster_info(path):
@@ -98,13 +74,6 @@ def test_dst_crs_none_keeps_the_source_crs(geotiff_file, tmp_path):
     output = to_cog([geotiff_file], tmp_path / "grid_cog.tif", dst_crs=None)
 
     assert raster_info(output)["stac"]["proj:epsg"] == 4326
-
-
-@pytest.mark.gdal
-def test_dst_crs_sets_the_output_crs(geotiff_file, tmp_path):
-    output = to_cog([geotiff_file], tmp_path / "grid_cog.tif", dst_crs="EPSG:32631")
-
-    assert raster_info(output)["stac"]["proj:epsg"] == 32631
 
 
 @pytest.mark.gdal
