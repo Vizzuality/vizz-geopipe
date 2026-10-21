@@ -166,9 +166,10 @@ def _to_vector_tiles(
         )
     if labels is not None:
         pipe = pipe.sql(_label_statement(labels, layer), dialect="SQLITE")
+        pipe = pipe.step("select", fields="_source", exclude=True)
     if where:
         pipe = pipe.filter(where)
-    pipe = pipe.clip(WEB_MERCATOR_BBOX, bbox_crs="EPSG:4326").make_valid(method="structure")
+    pipe = pipe.make_valid(method="structure").clip(WEB_MERCATOR_BBOX, bbox_crs="EPSG:4326")
     if fields:
         pipe = pipe.select((*fields, "_ogr_geometry_"))
     return pipe.write(

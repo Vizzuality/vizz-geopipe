@@ -86,7 +86,7 @@ def to_cog(
     if len(inputs) == 1:
         pipe = RasterPipeline.read(inputs[0])
     else:
-        pipe = RasterPipeline.mosaic(inputs)
+        pipe = RasterPipeline.mosaic(inputs, input_nodata=nodata, output_nodata=nodata)
     if nodata is not None:
         pipe = pipe.edit(nodata=nodata)
     if bbox is not None:

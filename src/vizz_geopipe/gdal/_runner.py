@@ -31,16 +31,17 @@ def gdal_version() -> tuple[int, int, int]:
     The result is cached: GDAL does not change while Python runs.
 
     Raises:
-        GdalError: If ``gdal`` is not on PATH or its version cannot be read.
+        GdalError: If ``gdal`` is not on PATH, cannot be run, or its version cannot be read.
     """
     command = ["gdal", "--version"]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
-    except FileNotFoundError as error:
-        raise GdalError(command, f"`gdal` was not found on PATH. {INSTALL_HINT}") from error
+    except OSError as error:
+        raise GdalError(command, f"`gdal` could not be run ({error}). {INSTALL_HINT}") from error
     match = re.search(r"GDAL (\d+)\.(\d+)\.(\d+)", result.stdout)
     if match is None:
-        raise GdalError(command, f"Could not read the GDAL version from {result.stdout!r}")
+        output = (result.stdout + result.stderr).strip()
+        raise GdalError(command, f"Could not read the GDAL version from {output!r}. {INSTALL_HINT}")
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch)
 
