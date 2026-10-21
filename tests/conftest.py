@@ -1,9 +1,12 @@
 """Fixtures shared by all tests."""
 
 import json
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 import pytest
+import requests
 
 from vizz_geopipe.errors import GdalError
 from vizz_geopipe.gdal import _pipeline
@@ -61,3 +64,57 @@ def geotiff_file(tmp_path) -> Path:
     options = "--size 64,64 --datatype Byte --crs EPSG:4326 --bbox 0,0,1,1 --burn 7"
     run_gdal(["raster", "create", *options.split(), str(path)])
     return path
+
+
+@dataclass
+class FakeWeb:
+    """What ``requests.get`` answers in tests, and the URLs it was asked for.
+
+    Attributes:
+        pages: The body of each URL. Any other URL answers 404.
+        requested: Every URL asked for, in order.
+    """
+
+    pages: dict[str, bytes] = field(default_factory=dict)
+    requested: list[str] = field(default_factory=list)
+
+
+class FakeResponse:
+    """The parts of ``requests.Response`` the sources use."""
+
+    def __init__(self, url: str, body: bytes | None) -> None:
+        self.url = url
+        self.body = body
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        if self.body is None:
+            raise requests.HTTPError(f"404 Not Found: {self.url}")
+
+    def iter_content(self, chunk_size: int):
+        yield self.body
+
+    @property
+    def text(self) -> str:
+        return self.body.decode()
+
+    def json(self):
+        return json.loads(self.body)
+
+
+@pytest.fixture
+def fake_web(monkeypatch) -> FakeWeb:
+    """Answer ``requests.get`` from ``FakeWeb.pages`` instead of the internet."""
+    web = FakeWeb()
+
+    def get(url, **kwargs):
+        web.requested.append(url)
+        return FakeResponse(url, web.pages.get(url))
+
+    monkeypatch.setattr(requests, "get", get)
+    return web
