@@ -2,7 +2,7 @@
 
 import tempfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
@@ -15,7 +15,7 @@ CHUNK_SIZE = 1024 * 1024
 
 
 @contextmanager
-def atomic_write(path: Path) -> Iterator[BinaryIO]:
+def atomic_write(path: Path) -> Generator[BinaryIO, None, None]:
     """Open a file to write ``path``, which only appears there once writing has finished.
 
     Writes go to a temporary file next to ``path``. When the ``with`` block ends normally the
