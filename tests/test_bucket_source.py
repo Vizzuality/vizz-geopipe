@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 import boto3
 import pytest
-from google.api_core.exceptions import NotFound
 from moto import mock_aws
 
 from vizz_geopipe.errors import SourceError
@@ -102,12 +101,14 @@ def test_gcs_objects_are_downloaded(tmp_path, monkeypatch):
     assert paths[0].read_bytes() == b"a"
 
 
-class FailingGcsClient:
-    def list_blobs(self, bucket, prefix):
-        raise NotFound("bucket layers not found")
-
-
 def test_gcs_errors_raise_source_error(tmp_path, monkeypatch):
+    # Google's errors exist only with the gcs extra (uv sync --extra gcs).
+    exceptions = pytest.importorskip("google.api_core.exceptions")
+
+    class FailingGcsClient:
+        def list_blobs(self, bucket, prefix):
+            raise exceptions.NotFound("bucket layers not found")
+
     monkeypatch.setattr(bucket_module, "_gcs_client", FailingGcsClient)
 
     with pytest.raises(SourceError, match="not found"):
