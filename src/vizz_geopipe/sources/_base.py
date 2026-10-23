@@ -47,7 +47,8 @@ class CachedSource(Source):
 
     After a download, ``dest/.source.json`` records the source's ``identity()``. A later
     ``fetch`` reuses the files only if that record exists, its identity equals the current
-    one, and every pattern in ``files`` still matches. Anything else downloads again.
+    one, and every pattern in ``files`` still matches. Anything else downloads again, after
+    deleting everything in ``dest``: give each source a folder of its own.
 
     Attributes:
         files: Glob patterns of the files to read, relative to ``dest``.
