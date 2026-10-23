@@ -6,10 +6,14 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Vizzuality" }]
 requires-python = ">=3.12,<3.14"
-dependencies = []
+dependencies = [
+    "boto3>=1.43.116",
+    "requests>=2.34.2",
+]
 
 [dependency-groups]
 dev = [
+    "moto[s3]>=5.2.4",
     "pre-commit>=4.0.0",
     "pytest>=8.3.0",
     "ruff>=0.14.0",
@@ -48,3 +52,8 @@ force-single-line = true
 
 [project.scripts]
 geopipe = "vizz_geopipe.cli:main"
+
+[project.optional-dependencies]
+gcs = [
+    "google-cloud-storage>=3.17.1",
+]
