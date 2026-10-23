@@ -12,7 +12,8 @@ jobs:
     container: ghcr.io/osgeo/gdal:ubuntu-small-3.13.0
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv publishes no major tag (v10) since v8, only full versions.
+      - uses: astral-sh/setup-uv@v10.3.2
       - name: Install
         run: uv sync --locked
       - name: Lint
