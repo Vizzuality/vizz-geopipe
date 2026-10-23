@@ -36,6 +36,31 @@ print(pipe)  # the exact gdal command, to run by hand when debugging
 pipe.write(Path("out/primary_roads.gpkg"), overwrite=True)
 ```
 
+## Sources
+
+A source gets a layer's data into a folder and returns the files to read: `HttpSource`
+(a URL, zips extracted), `LocalSource` (files on this computer), `BucketSource` (`s3://` or
+`gs://` objects) and `TileIndexSource` (a raster split into tiles).
+
+```python
+from pathlib import Path
+
+from vizz_geopipe.sources import HttpSource
+
+source = HttpSource(url="https://example.com/mangroves.zip", files=("*.shp",))
+paths = source.fetch(Path("data/raw/mangroves/0"))  # [Path("data/raw/mangroves/0/mangroves.shp")]
+```
+
+A fetch downloads again only when the source changes (another URL, a replaced bucket
+object) or a file is missing; `fetch(dest, refresh=True)` forces it. A download first
+deletes everything in `dest`, so give each source a folder of its own.
+
+Reading `gs://` buckets needs the `gcs` extra:
+
+```bash
+uv add "vizz-geopipe[gcs] @ git+https://github.com/Vizzuality/vizz-geopipe"
+```
+
 ## Development
 
 ```bash
