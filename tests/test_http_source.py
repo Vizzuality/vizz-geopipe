@@ -90,3 +90,25 @@ def test_corrupt_record_downloads_again(tmp_path, places):
 
     assert source.fetch(tmp_path) == [tmp_path / "places.shp"]
     assert places.requested == [URL, URL]
+
+
+def test_a_download_that_is_not_a_zip_needs_a_file_name(tmp_path, fake_web):
+    fake_web.pages[URL] = b"x,y"
+
+    with pytest.raises(SourceError, match="file name"):
+        HttpSource(url=URL, files=("*.csv",)).fetch(tmp_path)
+
+
+def test_a_download_that_is_not_a_zip_can_go_in_a_folder(tmp_path, fake_web):
+    fake_web.pages[URL] = b"x,y"
+
+    paths = HttpSource(url=URL, files=("data/a.csv",)).fetch(tmp_path)
+
+    assert paths == [tmp_path / "data" / "a.csv"]
+
+
+def test_a_broken_nested_zip_raises_source_error(tmp_path, fake_web):
+    fake_web.pages[URL] = zip_bytes({"inner.zip": b"PK not really a zip"})
+
+    with pytest.raises(SourceError, match="inner.zip"):
+        HttpSource(url=URL, files=("*",)).fetch(tmp_path)

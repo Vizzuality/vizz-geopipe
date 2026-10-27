@@ -83,6 +83,9 @@ def extract_zips(archive: Path, dest: Path) -> None:
     Args:
         archive: The zip file to extract.
         dest: The folder to extract into. It is created if needed.
+
+    Raises:
+        SourceError: If ``archive``, or a zip inside it, is not a valid zip.
     """
     _unzip(archive, dest)
     for nested in sorted(dest.rglob("*.zip")):
@@ -91,6 +94,9 @@ def extract_zips(archive: Path, dest: Path) -> None:
 
 def _unzip(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive) as opened:
-        opened.extractall(dest)
+    try:
+        with zipfile.ZipFile(archive) as opened:
+            opened.extractall(dest)
+    except zipfile.BadZipFile as error:
+        raise SourceError(str(archive), str(error)) from error
     archive.unlink()
