@@ -1,5 +1,6 @@
 """Tests for writing, downloading and extracting files."""
 
+import os
 import zipfile
 
 import pytest
@@ -23,6 +24,17 @@ def test_atomic_write_leaves_nothing_when_writing_fails(tmp_path):
         raise OSError("disk full")
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_written_files_follow_the_umask(tmp_path):
+    previous = os.umask(0o022)
+    try:
+        with atomic_write(tmp_path / "a.txt") as file:
+            file.write(b"a")
+    finally:
+        os.umask(previous)
+
+    assert (tmp_path / "a.txt").stat().st_mode & 0o777 == 0o644
 
 
 def test_download_file_writes_the_body(tmp_path, fake_web):
