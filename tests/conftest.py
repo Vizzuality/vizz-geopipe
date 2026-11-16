@@ -13,6 +13,7 @@ from vizz_geopipe.gdal import _pipeline
 from vizz_geopipe.gdal._runner import MIN_VERSION
 from vizz_geopipe.gdal._runner import gdal_version
 from vizz_geopipe.gdal._runner import run_gdal
+from vizz_geopipe.workdir import Workdir
 
 
 def gdal_is_installed() -> bool:
@@ -42,6 +43,12 @@ def gdal_calls(monkeypatch) -> list[list[str]]:
 
     monkeypatch.setattr(_pipeline, "run_gdal", record)
     return calls
+
+
+@pytest.fixture
+def workdir(tmp_path) -> Workdir:
+    """A project data folder in ``tmp_path / "data"``."""
+    return Workdir(tmp_path / "data")
 
 
 @pytest.fixture
