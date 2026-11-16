@@ -61,6 +61,36 @@ Reading `gs://` buckets needs the `gcs` extra:
 uv add "vizz-geopipe[gcs] @ git+https://github.com/Vizzuality/vizz-geopipe"
 ```
 
+## Layers
+
+A layer is one dataset built from its sources into one artifact: `VectorLayer` makes
+MBTiles or PMTiles, `CogLayer` a Cloud Optimized GeoTIFF.
+
+```python
+from pathlib import Path
+
+from vizz_geopipe.layers import VectorLayer
+from vizz_geopipe.sources import HttpSource
+from vizz_geopipe.workdir import Workdir
+
+layer = VectorLayer(
+    name="mangroves",
+    title="Mangroves",
+    sources=(HttpSource(url="https://example.com/mangroves.zip", files=("*.shp",)),),
+    max_zoom=10,
+)
+workdir = Workdir(Path("data"))
+if not layer.is_built(workdir):
+    layer.build(workdir)  # Path("data/processed/mangroves/mangroves.mbtiles")
+```
+
+`is_built` is true when the artifact exists and was built from the layer as it is now:
+change an option, a source's URL or its files and the layer must be built again; change
+only `title` or `publish_to` and it does not. A build that fails keeps the previous
+artifact in place. `build` logs its progress through `logging` (the `vizz_geopipe`
+logger), which shows nothing until your script configures it, e.g. with
+`logging.basicConfig(level=logging.INFO)`.
+
 ## Development
 
 ```bash
