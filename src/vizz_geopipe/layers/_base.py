@@ -1,5 +1,7 @@
 """The interface every layer follows, and the build shared by all of them."""
 
+import logging
+import time
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Sequence
@@ -12,6 +14,8 @@ from vizz_geopipe.fingerprint import read_build
 from vizz_geopipe.fingerprint import write_build
 from vizz_geopipe.sources import Source
 from vizz_geopipe.workdir import Workdir
+
+logger = logging.getLogger(__name__)
 
 # Fields that do not change the artifact: editing them must not rebuild the layer.
 NOT_FINGERPRINTED = ("title", "publish_to")
@@ -99,10 +103,13 @@ class Layer(ABC):
         # Before fetching: the record must describe the data that was asked for, even if a
         # source changes while the layer builds.
         fingerprint = self.fingerprint()
-        inputs = [
-            source.fetch(workdir.raw_dir(self.name) / str(index), refresh=refresh)
-            for index, source in enumerate(self.sources)
-        ]
+        logger.info("Building %s", self.name)
+        start = time.perf_counter()
+        inputs = []
+        for index, source in enumerate(self.sources):
+            folder = workdir.raw_dir(self.name) / str(index)
+            inputs.append(source.fetch(folder, refresh=refresh))
+            logger.debug("Fetched source %d of %s: %s", index, self.name, type(source).__name__)
         # In tmp/, on the same file system as processed/, so the move below is atomic: a
         # failed build leaves the previous artifact as it was.
         temporary = workdir.tmp_dir() / f"{self.name}{self.suffix}"
@@ -115,4 +122,5 @@ class Layer(ABC):
         temporary.replace(artifact)
         # Written last, so an interrupted build is never taken for a finished one.
         write_build(artifact.parent, fingerprint)
+        logger.info("Built %s in %.1f s: %s", self.name, time.perf_counter() - start, artifact)
         return artifact

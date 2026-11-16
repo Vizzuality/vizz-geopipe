@@ -1,5 +1,6 @@
 """Tests for what every layer does: fetch, convert, move into place, record."""
 
+import logging
 import shutil
 from dataclasses import dataclass
 
@@ -74,3 +75,14 @@ def test_failed_build_keeps_the_previous_artifact(workdir, layer):
 def test_a_layer_needs_a_source():
     with pytest.raises(ValueError):
         CopyLayer(name="notes", title="Notes", sources=())
+
+
+def test_build_logs_its_start_and_end(workdir, layer, caplog):
+    caplog.set_level(logging.INFO, logger="vizz_geopipe")
+
+    layer.build(workdir)
+
+    assert [record.getMessage().split(" in ")[0] for record in caplog.records] == [
+        "Building notes",
+        "Built notes",
+    ]
