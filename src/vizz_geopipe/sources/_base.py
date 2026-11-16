@@ -1,6 +1,7 @@
 """The interface every source follows, and the download cache shared by most of them."""
 
 import json
+import logging
 import shutil
 from abc import ABC
 from abc import abstractmethod
@@ -13,6 +14,8 @@ from vizz_geopipe.errors import SourceError
 from vizz_geopipe.sources._files import atomic_write
 
 RECORD_NAME = ".source.json"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -77,11 +80,14 @@ class CachedSource(Source):
             if dest.exists():
                 shutil.rmtree(dest)
             dest.mkdir(parents=True)
+            logger.info("Downloading %s into %s", type(self).__name__, dest)
             self._download(dest)
             # Written last, so an interrupted download is never taken for a finished one.
             record = {"identity": identity, "fetched_at": datetime.now(UTC).isoformat()}
             with atomic_write(dest / RECORD_NAME) as file:
                 file.write(json.dumps(record, indent=2).encode())
+        else:
+            logger.debug("Using the cached %s in %s", type(self).__name__, dest)
         return self._match(dest)
 
     @abstractmethod
