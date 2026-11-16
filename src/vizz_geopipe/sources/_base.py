@@ -1,6 +1,7 @@
 """The interface every source follows, and the download cache shared by most of them."""
 
 import json
+import logging
 import shutil
 from abc import ABC
 from abc import abstractmethod
@@ -10,8 +11,11 @@ from datetime import datetime
 from pathlib import Path
 
 from vizz_geopipe.errors import SourceError
+from vizz_geopipe.sources._files import atomic_write
 
 RECORD_NAME = ".source.json"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -50,6 +54,9 @@ class CachedSource(Source):
     one, and every pattern in ``files`` still matches. Anything else downloads again, after
     deleting everything in ``dest``: give each source a folder of its own.
 
+    A pattern also matches folders, on purpose: a File Geodatabase (``x.gdb``) is a folder
+    that GDAL reads.
+
     Attributes:
         files: Glob patterns of the files to read, relative to ``dest``.
     """
@@ -65,26 +72,34 @@ class CachedSource(Source):
         Raises:
             SourceError: If the download fails, or a pattern matches no file.
         """
-        if refresh or not self._is_cached(dest):
+        # Asked once: the record must describe the data the cache was checked against, even if
+        # the source changes while it downloads.
+        identity = self.identity()
+        if refresh or not self._is_cached(dest, identity):
             # Files of an older download (an edited URL) would still match the patterns.
             if dest.exists():
                 shutil.rmtree(dest)
             dest.mkdir(parents=True)
+            logger.info("Downloading %s into %s", type(self).__name__, dest)
             self._download(dest)
             # Written last, so an interrupted download is never taken for a finished one.
-            record = {"identity": self.identity(), "fetched_at": datetime.now(UTC).isoformat()}
-            (dest / RECORD_NAME).write_text(json.dumps(record, indent=2))
+            record = {"identity": identity, "fetched_at": datetime.now(UTC).isoformat()}
+            with atomic_write(dest / RECORD_NAME) as file:
+                file.write(json.dumps(record, indent=2).encode())
+        else:
+            logger.debug("Using the cached %s in %s", type(self).__name__, dest)
         return self._match(dest)
 
     @abstractmethod
     def _download(self, dest: Path) -> None:
         """Put the source's files in ``dest``, an empty folder that exists."""
 
-    def _is_cached(self, dest: Path) -> bool:
-        record = dest / RECORD_NAME
-        if not record.is_file():
+    def _is_cached(self, dest: Path, identity: dict[str, str]) -> bool:
+        try:
+            record = json.loads((dest / RECORD_NAME).read_text())
+        except (FileNotFoundError, ValueError):
             return False
-        if json.loads(record.read_text()).get("identity") != self.identity():
+        if not isinstance(record, dict) or record.get("identity") != identity:
             return False
         return all(self._glob(dest, pattern) for pattern in self.files)
 

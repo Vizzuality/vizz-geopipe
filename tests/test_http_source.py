@@ -1,6 +1,7 @@
 """Tests for downloading sources over HTTP, and the download cache."""
 
 import io
+import logging
 import zipfile
 
 import pytest
@@ -81,3 +82,56 @@ def test_a_download_that_is_not_a_zip_is_saved_as_the_first_file(tmp_path, fake_
 
     assert paths == [tmp_path / "data.csv"]
     assert paths[0].read_bytes() == b"x,y"
+
+
+@pytest.mark.parametrize("content", [b'{"ident', b"[]", b"\xff\xfe"])
+def test_corrupt_record_downloads_again(tmp_path, places, content):
+    source = HttpSource(url=URL, files=("*.shp",))
+    source.fetch(tmp_path)
+    (tmp_path / ".source.json").write_bytes(content)
+
+    assert source.fetch(tmp_path) == [tmp_path / "places.shp"]
+    assert places.requested == [URL, URL]
+
+
+def test_a_download_that_is_not_a_zip_needs_a_file_name(tmp_path, fake_web):
+    fake_web.pages[URL] = b"x,y"
+
+    with pytest.raises(SourceError, match="file name"):
+        HttpSource(url=URL, files=("*.csv",)).fetch(tmp_path)
+
+
+def test_a_download_that_is_not_a_zip_can_go_in_a_folder(tmp_path, fake_web):
+    fake_web.pages[URL] = b"x,y"
+
+    paths = HttpSource(url=URL, files=("data/a.csv",)).fetch(tmp_path)
+
+    assert paths == [tmp_path / "data" / "a.csv"]
+
+
+def test_a_broken_nested_zip_raises_source_error(tmp_path, fake_web):
+    fake_web.pages[URL] = zip_bytes({"inner.zip": b"PK not really a zip"})
+
+    with pytest.raises(SourceError, match="inner.zip"):
+        HttpSource(url=URL, files=("*",)).fetch(tmp_path)
+
+
+def test_fetch_logs_a_download_and_then_the_cache(tmp_path, places, caplog):
+    caplog.set_level(logging.DEBUG, logger="vizz_geopipe")
+    source = HttpSource(url=URL, files=("*.shp",))
+
+    source.fetch(tmp_path)
+    downloading = [record.levelname for record in caplog.records]
+    caplog.clear()
+    source.fetch(tmp_path)
+
+    assert downloading == ["INFO"]
+    assert [record.levelname for record in caplog.records] == ["DEBUG"]
+
+
+def test_fetch_logs_never_show_the_url(tmp_path, places, caplog):
+    caplog.set_level(logging.DEBUG, logger="vizz_geopipe")
+
+    HttpSource(url=URL, files=("*.shp",)).fetch(tmp_path)
+
+    assert "example.com" not in caplog.text

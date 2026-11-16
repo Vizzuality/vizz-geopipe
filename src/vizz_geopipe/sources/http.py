@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from vizz_geopipe.errors import SourceError
 from vizz_geopipe.sources._base import CachedSource
 from vizz_geopipe.sources._files import download_file
 from vizz_geopipe.sources._files import extract_zips
@@ -15,7 +16,8 @@ class HttpSource(CachedSource):
     """A file downloaded from a URL.
 
     Zip archives, and zips nested one level inside them, are extracted. Any other download
-    is saved as ``files[0]``, so ``files[0]`` must then be a file name, not a pattern.
+    is saved as ``files[0]``, so ``files[0]`` must then be a file name, not a pattern. It may
+    include folders (``"data/a.csv"``).
 
     Attributes:
         url: Where to download the data.
@@ -32,5 +34,9 @@ class HttpSource(CachedSource):
         download = download_file(self.url, dest / name)
         if zipfile.is_zipfile(download):
             extract_zips(download, dest)
+        elif any(character in self.files[0] for character in "*?["):
+            raise SourceError(self.url, "not a zip, so files[0] must be a file name, not a pattern")
         else:
-            download.replace(dest / self.files[0])
+            target = dest / self.files[0]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            download.replace(target)

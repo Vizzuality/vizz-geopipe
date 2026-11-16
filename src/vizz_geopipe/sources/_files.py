@@ -1,5 +1,6 @@
 """Write, download and extract the files of a source."""
 
+import os
 import tempfile
 import zipfile
 from collections.abc import Generator
@@ -40,6 +41,11 @@ def atomic_write(path: Path) -> Generator[BinaryIO, None, None]:
             file.close()
             temporary.unlink()
             raise
+    # NamedTemporaryFile makes the file readable by its owner only; give it the permissions
+    # of any new file. os.umask can only be read by setting it, so it is set back at once.
+    umask = os.umask(0)
+    os.umask(umask)
+    temporary.chmod(0o666 & ~umask)
     temporary.replace(path)
 
 
@@ -77,6 +83,9 @@ def extract_zips(archive: Path, dest: Path) -> None:
     Args:
         archive: The zip file to extract.
         dest: The folder to extract into. It is created if needed.
+
+    Raises:
+        SourceError: If ``archive``, or a zip inside it, is not a valid zip.
     """
     _unzip(archive, dest)
     for nested in sorted(dest.rglob("*.zip")):
@@ -85,6 +94,9 @@ def extract_zips(archive: Path, dest: Path) -> None:
 
 def _unzip(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive) as opened:
-        opened.extractall(dest)
+    try:
+        with zipfile.ZipFile(archive) as opened:
+            opened.extractall(dest)
+    except zipfile.BadZipFile as error:
+        raise SourceError(str(archive), str(error)) from error
     archive.unlink()
