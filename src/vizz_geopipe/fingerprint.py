@@ -38,7 +38,7 @@ def read_build(folder: Path) -> str | None:
         folder: The folder the artifact was built in.
 
     Returns:
-        The recorded fingerprint, or ``None`` if the record is missing, is not JSON, or has
+        The recorded fingerprint, or ``None`` if the record is missing, is not a JSON object, or has
         no fingerprint.
     """
     return _read(folder / BUILD_RECORD).get("fingerprint")
@@ -64,10 +64,11 @@ def read_published(folder: Path, destination: str) -> str | None:
         destination: The name of the destination.
 
     Returns:
-        The recorded fingerprint, or ``None`` if the record is missing, is not JSON, or the
+        The recorded fingerprint, or ``None`` if the record is missing, is not a JSON object, or the
         artifact was never published to ``destination``.
     """
-    return _read(folder / PUBLISH_RECORD).get(destination, {}).get("fingerprint")
+    entry = _read(folder / PUBLISH_RECORD).get(destination)
+    return entry.get("fingerprint") if isinstance(entry, dict) else None
 
 
 def write_published(folder: Path, destination: str, fingerprint: str, uri: str) -> None:
@@ -92,9 +93,9 @@ def write_published(folder: Path, destination: str, fingerprint: str, uri: str) 
 
 
 def _read(path: Path) -> dict[str, Any]:
-    """Return the JSON record at ``path``, or ``{}`` if it is missing or not JSON."""
+    """Return the JSON record at ``path``, or ``{}`` if it is missing or not a JSON object."""
     try:
-        return json.loads(path.read_text())
-    # A missing or half-written record is no record.
-    except (FileNotFoundError, json.JSONDecodeError):
+        record = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
         return {}
+    return record if isinstance(record, dict) else {}

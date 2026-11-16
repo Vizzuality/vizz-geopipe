@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from vizz_geopipe.fingerprint import BUILD_RECORD
+from vizz_geopipe.fingerprint import PUBLISH_RECORD
 from vizz_geopipe.fingerprint import build_fingerprint
 from vizz_geopipe.fingerprint import read_build
 from vizz_geopipe.fingerprint import read_published
@@ -44,10 +47,27 @@ def test_missing_build_record_reads_as_none(tmp_path):
     assert read_build(tmp_path) is None
 
 
-def test_corrupt_build_record_reads_as_none(tmp_path):
-    (tmp_path / BUILD_RECORD).write_text('{"finger')
+# Half written, JSON but not an object, not text at all.
+@pytest.mark.parametrize("content", [b'{"finger', b"[]", b'"abc"', b"\xff\xfe"])
+def test_corrupt_build_record_reads_as_none(tmp_path, content):
+    (tmp_path / BUILD_RECORD).write_bytes(content)
 
     assert read_build(tmp_path) is None
+
+
+@pytest.mark.parametrize("content", [b"[]", b'{"mapbox": "abc"}', b"\xff\xfe"])
+def test_corrupt_publish_record_reads_as_none(tmp_path, content):
+    (tmp_path / PUBLISH_RECORD).write_bytes(content)
+
+    assert read_published(tmp_path, "mapbox") is None
+
+
+def test_publishing_over_a_corrupt_record_starts_a_new_one(tmp_path):
+    (tmp_path / PUBLISH_RECORD).write_bytes(b"[]")
+
+    write_published(tmp_path, "mapbox", "abc", "user.mangroves")
+
+    assert read_published(tmp_path, "mapbox") == "abc"
 
 
 def test_published_fingerprint_is_read_back(tmp_path):

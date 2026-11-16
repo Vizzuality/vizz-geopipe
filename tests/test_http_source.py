@@ -84,10 +84,11 @@ def test_a_download_that_is_not_a_zip_is_saved_as_the_first_file(tmp_path, fake_
     assert paths[0].read_bytes() == b"x,y"
 
 
-def test_corrupt_record_downloads_again(tmp_path, places):
+@pytest.mark.parametrize("content", [b'{"ident', b"[]", b"\xff\xfe"])
+def test_corrupt_record_downloads_again(tmp_path, places, content):
     source = HttpSource(url=URL, files=("*.shp",))
     source.fetch(tmp_path)
-    (tmp_path / ".source.json").write_text('{"ident')
+    (tmp_path / ".source.json").write_bytes(content)
 
     assert source.fetch(tmp_path) == [tmp_path / "places.shp"]
     assert places.requested == [URL, URL]

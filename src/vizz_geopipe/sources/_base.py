@@ -96,11 +96,10 @@ class CachedSource(Source):
 
     def _is_cached(self, dest: Path, identity: dict[str, str]) -> bool:
         try:
-            recorded = json.loads((dest / RECORD_NAME).read_text()).get("identity")
-        # A missing or half-written record is no record: download again.
-        except (FileNotFoundError, json.JSONDecodeError):
+            record = json.loads((dest / RECORD_NAME).read_text())
+        except (FileNotFoundError, ValueError):
             return False
-        if recorded != identity:
+        if not isinstance(record, dict) or record.get("identity") != identity:
             return False
         return all(self._glob(dest, pattern) for pattern in self.files)
 
