@@ -37,7 +37,7 @@ class PublishError(RuntimeError):
     """An artifact could not be published.
 
     Attributes:
-        destination: The destination's name, e.g. ``"mapbox"``.
+        destination: The destination's class name, e.g. ``"MapboxDestination"``.
         reason: What went wrong.
     """
 
