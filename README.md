@@ -91,6 +91,37 @@ artifact in place. `build` logs its progress through `logging` (the `vizz_geopip
 logger), which shows nothing until your script configures it, e.g. with
 `logging.basicConfig(level=logging.INFO)`.
 
+## Destinations
+
+A destination is where an artifact is published: a Mapbox account, an S3 bucket or a
+Google Cloud Storage bucket. `publish` takes a file and a name, and returns where the file
+ended up.
+
+```python
+from pathlib import Path
+
+from vizz_geopipe.destinations import MapboxDestination
+from vizz_geopipe.destinations import S3Destination
+
+mbtiles = Path("data/processed/mangroves/mangroves.mbtiles")
+
+mapbox = MapboxDestination.from_env()
+mapbox.publish(mbtiles, name="mangroves", title="Mangroves")  # "<user>.mangroves"
+
+s3 = S3Destination(bucket="my-project-layers", prefix="layers/v1")
+s3.publish(mbtiles, name="mangroves")  # "s3://my-project-layers/layers/v1/mangroves.mbtiles"
+```
+
+- `MapboxDestination.from_env()` reads `MAPBOX_USER` and `MAPBOX_TOKEN`. It publishes
+  MBTiles only, and returns the tileset id once Mapbox has finished processing it.
+- `S3Destination` and `GCSDestination` take `bucket`, `prefix` and an optional
+  `public_base_url`; with it, `publish` returns the file's public URL instead of its
+  `s3://` or `gs://` URI. They hold no credentials: S3 uses boto3's usual chain
+  (environment variables, `~/.aws`, an instance role) and GCS Google's Application Default
+  Credentials. `GCSDestination` needs the `gcs` extra, as `gs://` sources do.
+- Every failure to publish is a `PublishError` (from `vizz_geopipe.errors`), naming the
+  destination and the reason, and never a token.
+
 ## Development
 
 ```bash
