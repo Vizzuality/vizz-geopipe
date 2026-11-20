@@ -1,5 +1,6 @@
-"""The names users import from vizz_geopipe.gdal, vizz_geopipe.sources and vizz_geopipe.layers."""
+"""The names users import from vizz_geopipe's gdal, sources, layers and destinations."""
 
+import vizz_geopipe.destinations
 import vizz_geopipe.gdal
 import vizz_geopipe.layers
 import vizz_geopipe.sources
@@ -32,3 +33,14 @@ def test_layers_exports_its_public_names():
     assert set(vizz_geopipe.layers.__all__) == {"CogLayer", "Layer", "VectorLayer"}
     for name in vizz_geopipe.layers.__all__:
         assert hasattr(vizz_geopipe.layers, name)
+
+
+def test_destinations_exports_its_public_names():
+    assert set(vizz_geopipe.destinations.__all__) == {
+        "Destination",
+        "GCSDestination",
+        "MapboxDestination",
+        "S3Destination",
+    }
+    for name in vizz_geopipe.destinations.__all__:
+        assert hasattr(vizz_geopipe.destinations, name)
