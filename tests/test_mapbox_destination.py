@@ -221,3 +221,36 @@ def test_a_failed_staging_upload_raises_publish_error(destination, mapbox, mbtil
 
     with pytest.raises(PublishError, match="MapboxDestination.*NoSuchBucket"):
         destination.publish(mbtiles, name="mangroves")
+
+
+def test_urllib3_debug_lines_never_show_the_token(destination, caplog):
+    # requests hands urllib3 the path with its query, and urllib3 logs it at DEBUG, in
+    # these formats (urllib3/connectionpool.py and urllib3/util/retry.py).
+    caplog.set_level(logging.DEBUG)
+    path = f"/uploads/v1/vizz/credentials?access_token={TOKEN}"
+
+    logging.getLogger("urllib3.connectionpool").debug(
+        '%s://%s:%s "%s %s %s" %s %s',
+        "https",
+        "api.mapbox.com",
+        443,
+        "POST",
+        path,
+        "HTTP/1.1",
+        200,
+        None,
+    )
+    logging.getLogger("urllib3.connectionpool").debug("Retry: %s", path)
+    logging.getLogger("urllib3.util.retry").debug(
+        "Incremented Retry for (url='%s'): %r", path, None
+    )
+
+    assert len(caplog.records) == 3
+    assert TOKEN not in caplog.text
+    assert "access_token=***" in caplog.text
+
+
+def test_accented_titles_keep_their_letters(destination, mapbox, mbtiles):
+    destination.publish(mbtiles, name="poblacion", title="Población de Ñuñoa (2020)")
+
+    assert mapbox.calls[1][3]["name"] == "Poblacion de Nunoa 2020"

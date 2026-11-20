@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -34,6 +35,38 @@ TIMEOUT_SECONDS = 3600
 TILESET_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}")
 # Mapbox rejects display names with punctuation such as brackets or commas.
 DISPLAY_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9 _-]+")
+ACCESS_TOKEN = re.compile(r"access_token=[^&\s'\"]+")
+
+
+class _HideAccessTokens(logging.Filter):
+    """Replace ``access_token=<token>`` in a log record's message with ``access_token=***``.
+
+    ``requests`` hands urllib3 the request's path with its query string, and urllib3 logs
+    it at ``DEBUG``, so a script that turns ``DEBUG`` on for everything would print the
+    token on every request.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "access_token=" in message:
+            record.msg = ACCESS_TOKEN.sub("access_token=***", message)
+            record.args = None
+        return True
+
+
+# The loggers that print a request's URL. A filter on a logger sees the records logged on
+# that logger, before any handler.
+for _name in ("urllib3.connectionpool", "urllib3.util.retry"):
+    logging.getLogger(_name).addFilter(_HideAccessTokens())
+
+
+def _display_name(title: str) -> str:
+    """Return ``title`` as Mapbox accepts it: accents dropped, other punctuation removed.
+
+    ``"Población de Ñuñoa (2020)"`` becomes ``"Poblacion de Nunoa 2020"``.
+    """
+    letters = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    return " ".join(DISPLAY_NAME_UNSAFE.sub(" ", letters).split())
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -94,7 +127,7 @@ class MapboxDestination(Destination):
         )
         staging = session.client("s3", region_name="us-east-1")
         staging.upload_file(str(artifact), credentials["bucket"], credentials["key"])
-        display_name = " ".join(DISPLAY_NAME_UNSAFE.sub(" ", title).split())
+        display_name = _display_name(title)
         upload = self._request(
             "POST",
             self.username,
