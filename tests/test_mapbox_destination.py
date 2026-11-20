@@ -214,3 +214,10 @@ def test_publishing_never_logs_the_token(destination, mapbox, mbtiles, caplog):
 
     assert caplog.records
     assert TOKEN not in caplog.text
+
+
+def test_a_failed_staging_upload_raises_publish_error(destination, mapbox, mbtiles):
+    mapbox.credentials = FakeAnswer(200, {**STAGING, "bucket": "missing"})
+
+    with pytest.raises(PublishError, match="MapboxDestination.*NoSuchBucket"):
+        destination.publish(mbtiles, name="mangroves")

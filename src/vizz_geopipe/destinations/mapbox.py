@@ -16,6 +16,7 @@ from typing import ClassVar
 
 import boto3
 import requests
+from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import BotoCoreError
 from botocore.exceptions import ClientError
 
@@ -158,5 +159,8 @@ class MapboxDestination(Destination):
         return response.json()
 
     def _errors(self) -> tuple[type[Exception], ...]:
-        """The errors of the upload to Mapbox's staging bucket."""
-        return (BotoCoreError, ClientError)
+        """The errors of the upload to Mapbox's staging bucket.
+
+        ``upload_file`` wraps a failed upload in ``S3UploadFailedError``.
+        """
+        return (BotoCoreError, ClientError, S3UploadFailedError)
