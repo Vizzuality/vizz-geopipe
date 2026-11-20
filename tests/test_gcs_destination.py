@@ -25,9 +25,11 @@ class FakeGcsClient:
 
     Attributes:
         uploads: ``(bucket, key, path, content_type)`` of every upload, in order.
+        error: Raised by every upload instead of recording it, when set.
     """
 
     uploads: list[tuple] = field(default_factory=list)
+    error: Exception | None = None
 
     def bucket(self, name):
         return FakeBucket(self, name)
@@ -48,6 +50,8 @@ class FakeBlob:
     key: str
 
     def upload_from_filename(self, filename, content_type=None):
+        if self.bucket.client.error:
+            raise self.bucket.client.error
         self.bucket.client.uploads.append((self.bucket.name, self.key, filename, content_type))
 
 
@@ -85,3 +89,29 @@ def test_publishing_without_the_gcs_extra_says_how_to_install_it(dem, monkeypatc
 
     with pytest.raises(PublishError, match=r"vizz-geopipe\[gcs\]"):
         destination.publish(dem, name="dem")
+
+
+def test_the_content_type_follows_the_suffix(client, tmp_path):
+    pmtiles = tmp_path / "places.pmtiles"
+    pmtiles.write_bytes(b"pm")
+
+    GCSDestination(bucket="layers").publish(pmtiles, name="places")
+
+    assert client.uploads == [("layers", "places.pmtiles", str(pmtiles), "application/vnd.pmtiles")]
+
+
+def test_a_public_base_url_gives_a_public_url(client, dem):
+    destination = GCSDestination(
+        bucket="layers", prefix="maps", public_base_url="https://cdn.example.com/"
+    )
+
+    assert destination.publish(dem, name="dem") == "https://cdn.example.com/maps/dem.tif"
+    assert [key for _, key, _, _ in client.uploads] == ["maps/dem.tif"]
+
+
+def test_a_google_error_raises_publish_error(client, dem):
+    exceptions = pytest.importorskip("google.api_core.exceptions")
+    client.error = exceptions.NotFound("bucket gone")
+
+    with pytest.raises(PublishError, match="GCSDestination.*bucket gone"):
+        GCSDestination(bucket="layers").publish(dem, name="dem")
