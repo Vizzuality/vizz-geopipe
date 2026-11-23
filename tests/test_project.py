@@ -1,5 +1,6 @@
-"""Tests for a project: its configuration checks and which layers a call selects."""
+"""Tests for a project: its configuration checks, which layers a call selects, and build."""
 
+import logging
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -25,9 +26,13 @@ class FakeLayer(Layer):
         return ".txt"
 
     def convert(self, inputs, output):
-        errors = {"source": SourceError("lost"), "value": ValueError("bad"), "bug": TypeError()}
+        errors = {
+            "source": lambda: SourceError("in.txt", "lost"),
+            "value": lambda: ValueError("bad"),
+            "bug": lambda: TypeError(),
+        }
         if self.fail:
-            raise errors[self.fail]
+            raise errors[self.fail]()
         output.write_text("".join(path.read_text() for files in inputs for path in files))
         return output
 
@@ -145,3 +150,89 @@ def test_publishing_a_named_layer_with_nothing_to_publish_is_rejected(tmp_path, 
 
     with pytest.raises(ValueError, match="'a'"):
         project._select(["a"], publishing=True)
+
+
+def test_build_builds_every_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a"), layer("b")])
+
+    results = project.build()
+
+    assert [(r.layer, r.step, r.outcome) for r in results] == [
+        ("a", "build", "built"),
+        ("b", "build", "built"),
+    ]
+    assert all(Path(r.detail).is_file() for r in results)
+
+
+def test_an_unchanged_layer_is_skipped(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["skipped"]
+
+
+def test_force_rebuilds_an_unchanged_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build(force=True)
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_refresh_rebuilds_an_unchanged_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build(refresh=True)
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_changed_source_is_rebuilt(tmp_path, layer, source):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+    source.write_text("new data")
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_failing_layer_does_not_stop_the_next(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="source"), layer("b")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["failed", "built"]
+    assert isinstance(results[0].error, SourceError)
+    assert results[0].failed
+    assert not results[1].failed
+
+
+def test_a_value_error_during_a_build_is_a_failed_result(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="value")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert results[0].detail == "bad"
+
+
+def test_a_bug_propagates(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="bug")])
+
+    with pytest.raises(TypeError):
+        project.build()
+
+
+def test_a_failure_is_logged_with_the_layer_name(tmp_path, layer, caplog):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="source")])
+
+    with caplog.at_level(logging.INFO):
+        project.build()
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert [r.getMessage() for r in errors] == ["a failed: in.txt: lost"]

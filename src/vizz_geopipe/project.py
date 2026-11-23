@@ -1,15 +1,52 @@
 """A project: the layers of a repository and the destinations they publish to."""
 
+import logging
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import Literal
 
 from vizz_geopipe.destinations import Destination
+from vizz_geopipe.errors import GdalError
+from vizz_geopipe.errors import PublishError
+from vizz_geopipe.errors import SourceError
 from vizz_geopipe.layers import Layer
 from vizz_geopipe.workdir import Workdir
 from vizz_geopipe.workdir import check_folder_name
+
+logger = logging.getLogger(__name__)
+
+# The errors a layer's step turns into a failed result. Not ``Exception``: a bug (a
+# TypeError, a KeyError) must stop the run, not be filed as one more failed layer.
+CAUGHT = (GdalError, SourceError, PublishError, ValueError)
+
+
+@dataclass(frozen=True, kw_only=True)
+class StepResult:
+    """What happened to one layer in one step.
+
+    Attributes:
+        layer: The layer's name.
+        step: Which step this is.
+        outcome: What happened: ``built``, ``skipped``, ``published`` or ``failed``.
+        destination: The destination's name, for a publish step.
+        detail: The artifact path, the URI, or the error's message.
+        error: The error, when the outcome is ``failed``.
+    """
+
+    layer: str
+    step: Literal["build", "publish"]
+    outcome: Literal["built", "skipped", "published", "failed"]
+    destination: str | None = None
+    detail: str | None = None
+    error: Exception | None = None
+
+    @property
+    def failed(self) -> bool:
+        """Whether the step failed."""
+        return self.outcome == "failed"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -102,3 +139,61 @@ class Project:
                 if not publishes(layer):
                     raise ValueError(f"layer {layer.name!r} has nothing to publish")
         return chosen
+
+    def _failed(
+        self,
+        layer: Layer,
+        step: Literal["build", "publish"],
+        error: Exception,
+        destination: str | None = None,
+    ) -> StepResult:
+        """Log ``error`` and return it as the ``failed`` result of ``step`` for ``layer``."""
+        if destination is None:
+            logger.error("%s failed: %s", layer.name, error)
+        else:
+            logger.error("%s on %s failed: %s", layer.name, destination, error)
+        return StepResult(
+            layer=layer.name,
+            step=step,
+            outcome="failed",
+            destination=destination,
+            detail=str(error),
+            error=error,
+        )
+
+    def build(
+        self, names: Sequence[str] | None = None, *, refresh: bool = False, force: bool = False
+    ) -> list[StepResult]:
+        """Build the layers that need it, and carry on past one that fails.
+
+        Args:
+            names: The layers to build, or ``None`` for all of them.
+            refresh: Download the sources again. This rebuilds too: downloading again and
+                then skipping the build would change nothing.
+            force: Build even if the layer is built and unchanged.
+
+        Returns:
+            One result per layer, in declaration order: ``built`` (``detail`` is the
+            artifact), ``skipped`` or ``failed``.
+
+        Raises:
+            ValueError: If a name is unknown (before anything is built).
+        """
+        workdir = self.workdir
+        results = []
+        for layer in self._select(names):
+            try:
+                if not (force or refresh) and layer.is_built(workdir):
+                    logger.info("Skipping %s: built and unchanged", layer.name)
+                    results.append(StepResult(layer=layer.name, step="build", outcome="skipped"))
+                    continue
+                artifact = layer.build(workdir, refresh=refresh)
+            except CAUGHT as error:
+                results.append(self._failed(layer, "build", error))
+            else:
+                results.append(
+                    StepResult(
+                        layer=layer.name, step="build", outcome="built", detail=str(artifact)
+                    )
+                )
+        return results
