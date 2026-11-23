@@ -30,7 +30,7 @@ class S3Destination(_BucketDestination):
         )
 
     def _errors(self) -> tuple[type[Exception], ...]:
-        """The errors of boto3 and botocore. Their text names the bucket, never the keys.
+        """The errors of boto3 and botocore. Their text names the bucket, never credentials.
 
         ``upload_file`` wraps a failed upload in ``S3UploadFailedError``.
         """

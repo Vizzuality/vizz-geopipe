@@ -82,3 +82,21 @@ def test_a_bucket_with_a_slash_is_rejected():
 
 def test_any_file_is_accepted():
     assert S3Destination(bucket="layers").accepts(Path("a.csv"))
+
+
+def test_geojson_is_stored_as_geojson(s3, tmp_path):
+    places = tmp_path / "places.geojson"
+    places.write_text("{}")
+
+    S3Destination(bucket="layers").publish(places, name="places")
+
+    head = s3.head_object(Bucket="layers", Key="places.geojson")
+    assert head["ContentType"] == "application/geo+json"
+
+
+@pytest.mark.parametrize("name", ["", "maps/dem"])
+def test_an_empty_name_or_one_with_a_slash_is_rejected(s3, dem, name):
+    with pytest.raises(ValueError, match="invalid object name"):
+        S3Destination(bucket="layers").publish(dem, name=name)
+
+    assert s3.list_objects_v2(Bucket="layers")["KeyCount"] == 0

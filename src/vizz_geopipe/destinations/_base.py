@@ -21,14 +21,15 @@ class Destination(ABC):
     the errors its service raises in ``_errors``.
 
     Attributes:
-        suffixes: The file suffixes this destination accepts. ``None`` accepts any file.
+        suffixes: The file suffixes this destination accepts, in lowercase; a file's
+            suffix matches whatever its case. ``None`` accepts any file.
     """
 
     suffixes: ClassVar[frozenset[str] | None] = None
 
     def accepts(self, artifact: Path) -> bool:
         """Return whether this destination can publish a file like ``artifact``."""
-        return self.suffixes is None or artifact.suffix in self.suffixes
+        return self.suffixes is None or artifact.suffix.lower() in self.suffixes
 
     def validate(self, name: str) -> None:
         """Check that ``name`` can be published here. Nothing to check by default.
