@@ -1,4 +1,4 @@
-"""Tests for a project: its configuration checks, which layers a call selects, and build."""
+"""Tests for a project: its configuration checks, which layers a call selects, build, publish."""
 
 import logging
 from dataclasses import dataclass
@@ -10,6 +10,8 @@ import pytest
 from vizz_geopipe.destinations import Destination
 from vizz_geopipe.destinations import MapboxDestination
 from vizz_geopipe.errors import SourceError
+from vizz_geopipe.fingerprint import read_build
+from vizz_geopipe.fingerprint import read_published
 from vizz_geopipe.layers import Layer
 from vizz_geopipe.project import Project
 from vizz_geopipe.sources import LocalSource
@@ -236,3 +238,152 @@ def test_a_failure_is_logged_with_the_layer_name(tmp_path, layer, caplog):
 
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert [r.getMessage() for r in errors] == ["a failed: in.txt: lost"]
+
+
+def test_publish_sends_the_artifact_to_each_destination(tmp_path, layer):
+    first, second = FakeDestination(), FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a", "b"))],
+        destinations={"a": first, "b": second},
+    )
+    project.build()
+
+    results = project.publish()
+
+    assert [(r.destination, r.outcome, r.detail) for r in results] == [
+        ("a", "published", "fake://x"),
+        ("b", "published", "fake://x"),
+    ]
+    assert first.uploads == [("x", "X")]
+    assert second.uploads == [("x", "X")]
+
+
+def test_publish_records_the_build_fingerprint(tmp_path, layer):
+    x = layer("x", publish_to=("a",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"a": FakeDestination()})
+    project.build()
+    folder = x.artifact(project.workdir).parent
+
+    project.publish()
+
+    assert read_published(folder, "a") == read_build(folder)
+    assert read_published(folder, "a") is not None
+
+
+def test_an_unchanged_publish_is_skipped(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    project.publish()
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["skipped"]
+    assert destination.uploads == [("x", "X")]
+
+
+def test_force_publishes_again(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    project.publish()
+
+    results = project.publish(force=True)
+
+    assert [r.outcome for r in results] == ["published"]
+    assert len(destination.uploads) == 2
+
+
+def test_to_publishes_to_one_destination_only(tmp_path, layer):
+    first, second = FakeDestination(), FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a", "b"))],
+        destinations={"a": first, "b": second},
+    )
+    project.build()
+
+    results = project.publish(to="b")
+
+    assert [(r.destination, r.outcome) for r in results] == [("b", "published")]
+    assert first.uploads == []
+    assert second.uploads == [("x", "X")]
+
+
+def test_a_layer_that_is_not_built_fails_with_a_hint(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert "geopipe build x" in results[0].detail
+    assert destination.uploads == []
+
+
+def test_a_stale_build_is_published_with_a_warning(tmp_path, layer, source, caplog):
+    x = layer("x", publish_to=("a",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"a": FakeDestination()})
+    project.build()
+    folder = x.artifact(project.workdir).parent
+    built = read_build(folder)
+    source.write_text("new data")
+
+    with caplog.at_level(logging.INFO):
+        results = project.publish()
+
+    assert [r.outcome for r in results] == ["published"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["x changed since it was built; publishing the existing build"]
+    assert read_published(folder, "a") == built
+
+
+def test_a_failing_destination_does_not_stop_the_next(tmp_path, layer):
+    x = layer("x", publish_to=("a", "b"))
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[x],
+        destinations={"a": FakeDestination(fail=True), "b": FakeDestination()},
+    )
+    project.build()
+    folder = x.artifact(project.workdir).parent
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed", "published"]
+    assert results[0].destination == "a"
+    assert read_published(folder, "a") is None
+    assert read_published(folder, "b") == read_build(folder)
+
+
+def test_a_failed_fingerprint_check_still_publishes(tmp_path, layer, source, caplog):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    source.unlink()
+
+    with caplog.at_level(logging.INFO):
+        results = project.publish()
+
+    assert [r.outcome for r in results] == ["published"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].startswith("could not check whether x changed: ")
+    assert destination.uploads == [("x", "X")]

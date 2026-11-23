@@ -12,6 +12,9 @@ from vizz_geopipe.destinations import Destination
 from vizz_geopipe.errors import GdalError
 from vizz_geopipe.errors import PublishError
 from vizz_geopipe.errors import SourceError
+from vizz_geopipe.fingerprint import read_build
+from vizz_geopipe.fingerprint import read_published
+from vizz_geopipe.fingerprint import write_published
 from vizz_geopipe.layers import Layer
 from vizz_geopipe.workdir import Workdir
 from vizz_geopipe.workdir import check_folder_name
@@ -196,4 +199,79 @@ class Project:
                         layer=layer.name, step="build", outcome="built", detail=str(artifact)
                     )
                 )
+        return results
+
+    def publish(
+        self,
+        names: Sequence[str] | None = None,
+        *,
+        to: str | None = None,
+        force: bool = False,
+    ) -> list[StepResult]:
+        """Publish the built layers to their destinations, skipping what is already there.
+
+        Each layer goes to every destination in its ``publish_to``, or only to ``to`` when
+        given. A layer that is not built fails with a hint to build it. A layer whose
+        sources changed since the build is published as built, with a warning. The
+        destination records the build's fingerprint, so the next call skips it.
+
+        Args:
+            names: The layers to publish, or ``None`` for all that publish somewhere.
+            to: Publish only to this destination.
+            force: Publish even if this build is already published there.
+
+        Returns:
+            One result per layer and destination, in declaration order: ``published``
+            (``detail`` is the URI), ``skipped`` or ``failed``.
+
+        Raises:
+            ValueError: If a name or ``to`` is unknown, or a layer asked for by name has
+                nothing to publish (before anything is published).
+        """
+        layers = self._select(names, to=to, publishing=True)
+        results = []
+        for layer in layers:
+            artifact = layer.artifact(self.workdir)
+            build = read_build(artifact.parent) if artifact.is_file() else None
+            keys = [to] if to is not None else list(layer.publish_to)
+            if build is None:
+                for key in keys:
+                    error = PublishError(
+                        type(self.destinations[key]).__name__,
+                        f"{layer.name} is not built; run geopipe build {layer.name}",
+                    )
+                    results.append(self._failed(layer, "publish", error, destination=key))
+                continue
+            try:
+                if layer.fingerprint() != build:
+                    logger.warning(
+                        "%s changed since it was built; publishing the existing build", layer.name
+                    )
+            except SourceError as error:
+                logger.warning("could not check whether %s changed: %s", layer.name, error)
+            for key in keys:
+                if not force and read_published(artifact.parent, key) == build:
+                    logger.info("Skipping %s on %s: already published", layer.name, key)
+                    results.append(
+                        StepResult(
+                            layer=layer.name, step="publish", outcome="skipped", destination=key
+                        )
+                    )
+                    continue
+                destination = self.destinations[key]
+                try:
+                    uri = destination.publish(artifact, name=layer.name, title=layer.title)
+                except CAUGHT as error:
+                    results.append(self._failed(layer, "publish", error, destination=key))
+                else:
+                    write_published(artifact.parent, key, build, uri)
+                    results.append(
+                        StepResult(
+                            layer=layer.name,
+                            step="publish",
+                            outcome="published",
+                            destination=key,
+                            detail=uri,
+                        )
+                    )
         return results
