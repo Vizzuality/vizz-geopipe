@@ -14,6 +14,7 @@ CONTENT_TYPES = {
     ".tiff": "image/tiff",
     ".pmtiles": "application/vnd.pmtiles",
     ".mbtiles": "application/vnd.sqlite3",
+    ".geojson": "application/geo+json",
 }
 
 
@@ -54,6 +55,18 @@ class _BucketDestination(Destination):
             raise ValueError(
                 f"invalid bucket {self.bucket!r}: give the bucket's name only, "
                 "and any folder as prefix"
+            )
+
+    def validate(self, name: str) -> None:
+        """Check that ``name`` can name an object: not empty, and without ``/``.
+
+        Raises:
+            ValueError: If ``name`` is empty or contains ``/`` (a folder belongs in
+                ``prefix``).
+        """
+        if not name or "/" in name:
+            raise ValueError(
+                f"invalid object name {name!r}: give a name without '/', and any folder as prefix"
             )
 
     def key(self, name: str, suffix: str) -> str:

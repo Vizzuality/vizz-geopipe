@@ -115,3 +115,7 @@ def test_without_suffixes_any_file_is_accepted():
         suffixes: ClassVar[frozenset[str] | None] = None
 
     assert AnyFile().accepts(Path("a.tif"))
+
+
+def test_suffixes_are_matched_whatever_their_case():
+    assert FakeDestination().accepts(Path("NOTES.TXT"))
