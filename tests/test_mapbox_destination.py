@@ -29,10 +29,13 @@ STAGING = {
 
 @dataclass
 class FakeAnswer:
-    """The parts of ``requests.Response`` that ``MapboxDestination`` reads."""
+    """The parts of ``requests.Response`` that ``MapboxDestination`` reads.
+
+    A ``str`` payload is an answer that is not JSON, such as an HTML error page.
+    """
 
     status_code: int
-    payload: dict
+    payload: dict | str
 
     @property
     def ok(self) -> bool:
@@ -40,9 +43,13 @@ class FakeAnswer:
 
     @property
     def text(self) -> str:
+        if isinstance(self.payload, str):
+            return self.payload
         return json.dumps(self.payload)
 
     def json(self) -> dict:
+        if isinstance(self.payload, str):
+            raise requests.JSONDecodeError("Expecting value", self.payload, 0)
         return self.payload
 
 
@@ -254,3 +261,28 @@ def test_accented_titles_keep_their_letters(destination, mapbox, mbtiles):
     destination.publish(mbtiles, name="poblacion", title="Población de Ñuñoa (2020)")
 
     assert mapbox.calls[1][3]["name"] == "Poblacion de Nunoa 2020"
+
+
+def test_an_error_page_is_cut_short_in_the_error(destination, mapbox, mbtiles):
+    page = "<html>" + "x" * 5000 + "</html>"
+    mapbox.credentials = FakeAnswer(403, page)
+
+    with pytest.raises(PublishError, match="403") as caught:
+        destination.publish(mbtiles, name="mangroves")
+
+    assert len(str(caught.value)) < 400
+
+
+def test_a_title_of_only_punctuation_falls_back_to_the_name(destination, mapbox, mbtiles):
+    destination.publish(mbtiles, name="mangroves", title="(...)")
+
+    assert mapbox.calls[1][3]["name"] == "mangroves"
+
+
+def test_debug_logs_never_show_the_staging_credentials(destination, mapbox, mbtiles, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    destination.publish(mbtiles, name="mangroves")
+
+    assert STAGING["sessionToken"] not in caplog.text
+    assert STAGING["secretAccessKey"] not in caplog.text

@@ -35,29 +35,30 @@ TIMEOUT_SECONDS = 3600
 TILESET_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}")
 # Mapbox rejects display names with punctuation such as brackets or commas.
 DISPLAY_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9 _-]+")
-ACCESS_TOKEN = re.compile(r"access_token=[^&\s'\"]+")
+SECRET = re.compile(r"(access_token=|x-amz-security-token'?:\s*b?'?)[^&\s'\"]+", re.IGNORECASE)
 
 
-class _HideAccessTokens(logging.Filter):
-    """Replace ``access_token=<token>`` in a log record's message with ``access_token=***``.
+class _HideSecrets(logging.Filter):
+    """Replace the tokens in a log record's message with ``***``.
 
-    ``requests`` hands urllib3 the request's path with its query string, and urllib3 logs
-    it at ``DEBUG``, so a script that turns ``DEBUG`` on for everything would print the
-    token on every request.
+    urllib3 logs each request's path and query (with the Mapbox token) at ``DEBUG``, and
+    botocore each signed request (with the staging token), so a script that turns ``DEBUG``
+    on for everything would print them.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if "access_token=" in message:
-            record.msg = ACCESS_TOKEN.sub("access_token=***", message)
+        hidden = SECRET.sub(r"\1***", message)
+        if hidden != message:
+            record.msg = hidden
             record.args = None
         return True
 
 
-# The loggers that print a request's URL. A filter on a logger sees the records logged on
-# that logger, before any handler.
-for _name in ("urllib3.connectionpool", "urllib3.util.retry"):
-    logging.getLogger(_name).addFilter(_HideAccessTokens())
+# The loggers that print a token. A filter on a logger sees the records logged on that
+# logger, before any handler.
+for _name in ("urllib3.connectionpool", "urllib3.util.retry", "botocore.auth", "botocore.endpoint"):
+    logging.getLogger(_name).addFilter(_HideSecrets())
 
 
 def _display_name(title: str) -> str:
@@ -127,7 +128,7 @@ class MapboxDestination(Destination):
         )
         staging = session.client("s3", region_name="us-east-1")
         staging.upload_file(str(artifact), credentials["bucket"], credentials["key"])
-        display_name = _display_name(title)
+        display_name = _display_name(title) or name  # a title of only punctuation
         upload = self._request(
             "POST",
             self.username,
@@ -187,7 +188,7 @@ class MapboxDestination(Destination):
         if not response.ok:
             raise PublishError(
                 type(self).__name__,
-                f"Mapbox answered {response.status_code} to {method} {path}: {response.text}",
+                f"Mapbox answered {response.status_code} to {method} {path}: {response.text[:200]}",
             )
         return response.json()
 
