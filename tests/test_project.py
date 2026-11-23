@@ -1,0 +1,664 @@
+"""Tests for a project: its configuration checks, which layers a call selects, build, publish."""
+
+import logging
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
+
+import pytest
+
+from vizz_geopipe.destinations import Destination
+from vizz_geopipe.destinations import MapboxDestination
+from vizz_geopipe.errors import SourceError
+from vizz_geopipe.fingerprint import read_build
+from vizz_geopipe.fingerprint import read_published
+from vizz_geopipe.layers import Layer
+from vizz_geopipe.project import Project
+from vizz_geopipe.sources import LocalSource
+
+
+@dataclass(frozen=True, kw_only=True)
+class FakeLayer(Layer):
+    """Copies its sources' files into a ``.txt`` artifact; raises ``fail`` when built."""
+
+    fail: str | None = None  # "source", "value" or "bug": SourceError, ValueError, TypeError
+
+    @property
+    def suffix(self) -> str:
+        return ".txt"
+
+    def convert(self, inputs, output):
+        errors = {
+            "source": lambda: SourceError("in.txt", "lost"),
+            "value": lambda: ValueError("bad"),
+            "bug": lambda: TypeError(),
+        }
+        if self.fail:
+            raise errors[self.fail]()
+        output.write_text("".join(path.read_text() for files in inputs for path in files))
+        return output
+
+
+@dataclass(frozen=True, kw_only=True)
+class FakeDestination(Destination):
+    """Records ``(name, title)`` per upload; raises ``OSError`` if ``fail``."""
+
+    fail: bool = False
+    uploads: list[tuple[str, str]] = field(default_factory=list)
+
+    def _errors(self):
+        return (OSError,)
+
+    def _upload(self, artifact, name, title):
+        if self.fail:
+            raise OSError("disk on fire")
+        self.uploads.append((name, title))
+        return f"fake://{name}"
+
+
+@pytest.fixture
+def source(tmp_path) -> Path:
+    """A text file with one line."""
+    path = tmp_path / "in.txt"
+    path.write_text("data")
+    return path
+
+
+@pytest.fixture
+def layer(source):
+    """Make a ``FakeLayer`` called ``name``, reading ``source``."""
+
+    def make(name, **kwargs):
+        sources = (LocalSource(files=(str(source),)),)
+        return FakeLayer(name=name, title=name.title(), sources=sources, **kwargs)
+
+    return make
+
+
+def test_layer_names_must_be_unique(tmp_path, layer):
+    with pytest.raises(ValueError, match="two layers are named 'x'"):
+        Project(data_dir=tmp_path, layers=[layer("x"), layer("x")])
+
+
+def test_layer_names_must_be_folder_names(tmp_path, layer):
+    with pytest.raises(ValueError, match="layer 'a/b'"):
+        Project(data_dir=tmp_path, layers=[layer("a/b")])
+
+
+def test_publish_to_must_name_a_destination(tmp_path, layer):
+    with pytest.raises(ValueError, match="layer 'x' publishes to 'mapbox'"):
+        Project(data_dir=tmp_path, layers=[layer("x", publish_to=("mapbox",))])
+
+
+def test_a_destination_must_accept_the_layer_suffix(tmp_path, layer):
+    with pytest.raises(ValueError, match=r"layer 'x': MapboxDestination cannot publish \.txt"):
+        Project(
+            data_dir=tmp_path,
+            layers=[layer("x", publish_to=("mapbox",))],
+            destinations={"mapbox": MapboxDestination()},
+        )
+
+
+def test_a_destination_must_accept_the_layer_name(tmp_path, source):
+    @dataclass(frozen=True, kw_only=True)
+    class TilesLayer(FakeLayer):
+        @property
+        def suffix(self) -> str:
+            return ".mbtiles"
+
+    sources = (LocalSource(files=(str(source),)),)
+    tiles = TilesLayer(name="a.b", title="A", sources=sources, publish_to=("mapbox",))
+
+    with pytest.raises(ValueError, match=r"layer 'a\.b': invalid Mapbox tileset name"):
+        Project(data_dir=tmp_path, layers=[tiles], destinations={"mapbox": MapboxDestination()})
+
+
+def test_unknown_names_are_rejected(tmp_path, layer):
+    project = Project(data_dir=tmp_path, layers=[layer("a")])
+
+    with pytest.raises(ValueError, match="b, c"):
+        project._select(["b", "a", "c"])
+
+
+def test_unknown_destination_is_rejected(tmp_path, layer):
+    project = Project(data_dir=tmp_path, layers=[layer("a")])
+
+    with pytest.raises(ValueError, match="'nowhere'"):
+        project._select(None, to="nowhere")
+
+
+def test_selection_keeps_declaration_order(tmp_path, layer):
+    project = Project(data_dir=tmp_path, layers=[layer("a"), layer("b"), layer("c")])
+
+    selected = project._select(["c", "a"])
+
+    assert [item.name for item in selected] == ["a", "c"]
+
+
+def test_publishing_all_leaves_out_layers_with_nothing_to_publish(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path,
+        layers=[layer("a"), layer("b", publish_to=("fake",))],
+        destinations={"fake": FakeDestination()},
+    )
+
+    selected = project._select(None, publishing=True)
+
+    assert [item.name for item in selected] == ["b"]
+
+
+def test_publishing_a_named_layer_with_nothing_to_publish_is_rejected(tmp_path, layer):
+    project = Project(data_dir=tmp_path, layers=[layer("a")])
+
+    with pytest.raises(ValueError, match="'a'"):
+        project._select(["a"], publishing=True)
+
+
+def test_build_builds_every_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a"), layer("b")])
+
+    results = project.build()
+
+    assert [(r.layer, r.step, r.outcome) for r in results] == [
+        ("a", "build", "built"),
+        ("b", "build", "built"),
+    ]
+    assert all(Path(r.detail).is_file() for r in results)
+
+
+def test_an_unchanged_layer_is_skipped(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["skipped"]
+
+
+def test_force_rebuilds_an_unchanged_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build(force=True)
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_refresh_rebuilds_an_unchanged_layer(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+
+    results = project.build(refresh=True)
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_changed_source_is_rebuilt(tmp_path, layer, source):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a")])
+    project.build()
+    source.write_text("new data")
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_failing_layer_does_not_stop_the_next(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="source"), layer("b")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["failed", "built"]
+    assert isinstance(results[0].error, SourceError)
+    assert results[0].failed
+    assert not results[1].failed
+
+
+def test_a_value_error_during_a_build_is_a_failed_result(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="value")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert results[0].detail == "bad"
+
+
+def test_a_bug_propagates(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="bug")])
+
+    with pytest.raises(TypeError):
+        project.build()
+
+
+def test_a_failure_is_logged_with_the_layer_name(tmp_path, layer, caplog):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("a", fail="source")])
+
+    with caplog.at_level(logging.INFO):
+        project.build()
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert [r.getMessage() for r in errors] == ["a failed: in.txt: lost"]
+
+
+def test_publish_sends_the_artifact_to_each_destination(tmp_path, layer):
+    first, second = FakeDestination(), FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a", "b"))],
+        destinations={"a": first, "b": second},
+    )
+    project.build()
+
+    results = project.publish()
+
+    assert [(r.destination, r.outcome, r.detail) for r in results] == [
+        ("a", "published", "fake://x"),
+        ("b", "published", "fake://x"),
+    ]
+    assert first.uploads == [("x", "X")]
+    assert second.uploads == [("x", "X")]
+
+
+def test_publish_records_the_build_fingerprint(tmp_path, layer):
+    x = layer("x", publish_to=("a",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"a": FakeDestination()})
+    project.build()
+    folder = x.artifact(project.workdir).parent
+
+    project.publish()
+
+    assert read_published(folder, "a") == read_build(folder)
+    assert read_published(folder, "a") is not None
+
+
+def test_an_unchanged_publish_is_skipped(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    project.publish()
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["skipped"]
+    assert destination.uploads == [("x", "X")]
+
+
+def test_force_publishes_again(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    project.publish()
+
+    results = project.publish(force=True)
+
+    assert [r.outcome for r in results] == ["published"]
+    assert len(destination.uploads) == 2
+
+
+def test_to_publishes_to_one_destination_only(tmp_path, layer):
+    first, second = FakeDestination(), FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a", "b"))],
+        destinations={"a": first, "b": second},
+    )
+    project.build()
+
+    results = project.publish(to="b")
+
+    assert [(r.destination, r.outcome) for r in results] == [("b", "published")]
+    assert first.uploads == []
+    assert second.uploads == [("x", "X")]
+
+
+def test_a_layer_that_is_not_built_fails_with_a_hint(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert "geopipe build x" in results[0].detail
+    assert destination.uploads == []
+
+
+def test_a_stale_build_is_published_with_a_warning(tmp_path, layer, source, caplog):
+    x = layer("x", publish_to=("a",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"a": FakeDestination()})
+    project.build()
+    folder = x.artifact(project.workdir).parent
+    built = read_build(folder)
+    source.write_text("new data")
+
+    with caplog.at_level(logging.INFO):
+        results = project.publish()
+
+    assert [r.outcome for r in results] == ["published"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["x changed since it was built; publishing the existing build"]
+    assert read_published(folder, "a") == built
+
+
+def test_a_failing_destination_does_not_stop_the_next(tmp_path, layer):
+    x = layer("x", publish_to=("a", "b"))
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[x],
+        destinations={"a": FakeDestination(fail=True), "b": FakeDestination()},
+    )
+    project.build()
+    folder = x.artifact(project.workdir).parent
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed", "published"]
+    assert results[0].destination == "a"
+    assert read_published(folder, "a") is None
+    assert read_published(folder, "b") == read_build(folder)
+
+
+def test_a_failed_fingerprint_check_still_publishes(tmp_path, layer, source, caplog):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+    project.build()
+    source.unlink()
+
+    with caplog.at_level(logging.INFO):
+        results = project.publish()
+
+    assert [r.outcome for r in results] == ["published"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].startswith("could not check whether x changed: ")
+    assert destination.uploads == [("x", "X")]
+
+
+def test_run_builds_then_publishes(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": FakeDestination()},
+    )
+
+    results = project.run()
+
+    assert [r.outcome for r in results] == ["built", "published"]
+
+
+def test_run_does_not_publish_a_failed_build(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",), fail="source")],
+        destinations={"a": destination},
+    )
+
+    results = project.run()
+
+    assert [(r.step, r.outcome) for r in results] == [("build", "failed")]
+    assert destination.uploads == []
+
+
+def test_run_without_publishing_only_builds(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": destination},
+    )
+
+    results = project.run(publish=False)
+
+    assert [(r.step, r.outcome) for r in results] == [("build", "built")]
+    assert destination.uploads == []
+
+
+def test_run_to_one_destination_builds_only_its_layers(tmp_path, layer):
+    b = layer("b", publish_to=("two",))
+    two = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("a", publish_to=("one",)), b],
+        destinations={"one": FakeDestination(), "two": two},
+    )
+
+    results = project.run(to="one")
+
+    assert {r.layer for r in results} == {"a"}
+    assert not b.artifact(project.workdir).exists()
+    assert two.uploads == []
+
+
+def test_run_publishes_a_skipped_build(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": FakeDestination()},
+    )
+    project.build()
+
+    results = project.run()
+
+    assert [r.outcome for r in results] == ["skipped", "published"]
+
+
+def test_run_publishes_the_layers_whose_build_succeeded(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[
+            layer("a", publish_to=("d",), fail="source"),
+            layer("b", publish_to=("d",)),
+        ],
+        destinations={"d": destination},
+    )
+
+    results = project.run()
+
+    assert [(r.layer, r.step, r.outcome) for r in results] == [
+        ("a", "build", "failed"),
+        ("b", "build", "built"),
+        ("b", "publish", "published"),
+    ]
+    assert destination.uploads == [("b", "B")]
+
+
+def test_run_rejects_a_named_layer_with_nothing_to_publish(tmp_path, layer):
+    a = layer("a", publish_to=("one",))
+    b = layer("b", publish_to=("two",))
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[a, b],
+        destinations={"one": FakeDestination(), "two": FakeDestination()},
+    )
+
+    with pytest.raises(ValueError, match="'b' has nothing to publish"):
+        project.run(["a", "b"], to="one")
+
+    assert not a.artifact(project.workdir).exists()
+    assert not b.artifact(project.workdir).exists()
+
+
+def test_run_without_publishing_builds_a_layer_that_publishes_nowhere(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("x")])
+
+    results = project.run(["x"], publish=False)
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_status_of_a_new_project(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a", "b"))],
+        destinations={"a": FakeDestination(), "b": FakeDestination()},
+    )
+
+    [status] = project.status()
+
+    assert status.state == "not built"
+    assert status.published == {"a": "not published", "b": "not published"}
+
+
+def test_status_after_run(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": FakeDestination()},
+    )
+    project.run()
+
+    [status] = project.status()
+
+    assert (status.state, status.published) == ("built", {"a": "published"})
+
+
+def test_status_after_a_source_changes(tmp_path, layer, source):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": FakeDestination()},
+    )
+    project.run()
+    source.write_text("changed")
+
+    [status] = project.status()
+
+    assert (status.state, status.published) == ("stale", {"a": "published"})
+
+
+def test_status_after_a_rebuild(tmp_path, layer, source):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("a",))],
+        destinations={"a": FakeDestination()},
+    )
+    project.run()
+    source.write_text("changed")
+    project.build()
+
+    [status] = project.status()
+
+    assert (status.state, status.published) == ("built", {"a": "outdated"})
+
+
+def test_status_shows_unknown_when_the_fingerprint_fails(tmp_path, layer):
+    first, second = tmp_path / "first.txt", tmp_path / "second.txt"
+    first.write_text("1")
+    second.write_text("2")
+    layers = [
+        FakeLayer(
+            name=name, title=name, sources=(LocalSource(files=(str(path),)),), publish_to=("d",)
+        )
+        for name, path in [("a", first), ("b", second)]
+    ]
+    project = Project(
+        data_dir=tmp_path / "data", layers=layers, destinations={"d": FakeDestination()}
+    )
+    project.run()
+    first.unlink()
+
+    first_status, second_status = project.status()
+
+    assert first_status.state == "unknown"
+    assert first_status.detail
+    assert first_status.published == {"d": "published"}
+    assert second_status.state == "built"
+
+
+def test_run_with_refresh_publishes_again(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("d",))],
+        destinations={"d": destination},
+    )
+    project.run()
+
+    results = project.run(refresh=True)
+
+    assert [r.outcome for r in results] == ["built", "published"]
+    assert len(destination.uploads) == 2
+
+
+def test_a_single_name_can_be_given_as_a_string(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("mangrove"), layer("mangroves")])
+
+    results = project.build("mangroves")
+
+    assert [(r.layer, r.outcome) for r in results] == [("mangroves", "built")]
+
+
+def test_data_dir_can_be_a_string(tmp_path, layer):
+    project = Project(data_dir=str(tmp_path / "data"), layers=[layer("x")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_bug_in_a_destination_propagates(tmp_path, layer):
+    class Buggy(FakeDestination):
+        def _upload(self, artifact, name, title):
+            raise RuntimeError("bug")
+
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("d",))],
+        destinations={"d": Buggy()},
+    )
+    project.build()
+
+    with pytest.raises(RuntimeError, match="bug"):
+        project.publish()
+
+
+def test_a_deleted_artifact_is_not_built(tmp_path, layer):
+    x = layer("x", publish_to=("d",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"d": FakeDestination()})
+    project.build()
+    x.artifact(project.workdir).unlink()
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert "geopipe build" in results[0].detail
+
+
+def test_run_leaves_out_layers_that_publish_nowhere(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("a", publish_to=("d",)), layer("b")],
+        destinations={"d": FakeDestination()},
+    )
+
+    results = project.run()
+
+    assert {r.layer for r in results} == {"a"}
+
+
+def test_status_ignores_a_publish_record_without_a_build(tmp_path, layer):
+    x = layer("x", publish_to=("d",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"d": FakeDestination()})
+    project.run()
+    x.artifact(project.workdir).unlink()
+
+    (status,) = project.status()
+
+    assert (status.state, status.published) == ("not built", {"d": "not published"})

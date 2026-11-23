@@ -105,15 +105,16 @@ from vizz_geopipe.destinations import S3Destination
 
 mbtiles = Path("data/processed/mangroves/mangroves.mbtiles")
 
-mapbox = MapboxDestination.from_env()
+mapbox = MapboxDestination()
 mapbox.publish(mbtiles, name="mangroves", title="Mangroves")  # "<user>.mangroves"
 
 s3 = S3Destination(bucket="my-project-layers", prefix="layers/v1")
 s3.publish(mbtiles, name="mangroves")  # "s3://my-project-layers/layers/v1/mangroves.mbtiles"
 ```
 
-- `MapboxDestination.from_env()` reads `MAPBOX_USER` and `MAPBOX_TOKEN`. It publishes
-  MBTiles only, and returns the tileset id once Mapbox has finished processing it.
+- `MapboxDestination()` reads `MAPBOX_USER` and `MAPBOX_TOKEN` when a file is published (or
+  takes `username=` and `token=`). It publishes MBTiles only, and returns the tileset id once
+  Mapbox has finished processing it.
 - `S3Destination` and `GCSDestination` take `bucket`, `prefix` and an optional
   `public_base_url`; with it, `publish` returns the file's public URL instead of its
   `s3://` or `gs://` URI. They hold no credentials: S3 uses boto3's usual chain
@@ -121,6 +122,54 @@ s3.publish(mbtiles, name="mangroves")  # "s3://my-project-layers/layers/v1/mangr
   Credentials. `GCSDestination` needs the `gcs` extra, as `gs://` sources do.
 - Every failure to publish is a `PublishError` (from `vizz_geopipe.errors`), naming the
   destination and the reason, and never a token.
+
+## Project
+
+A `Project` ties the layers of a repository to the destinations they publish to, and runs
+them. It checks its configuration when created: a layer that publishes to a name that is
+not in `destinations`, or to a destination that cannot take its file, raises `ValueError`.
+
+```python
+from pathlib import Path
+
+from vizz_geopipe import HttpSource, MapboxDestination, Project, VectorLayer
+
+project = Project(
+    data_dir=Path("data"),
+    destinations={"mapbox": MapboxDestination()},
+    layers=[
+        VectorLayer(
+            name="mangroves",
+            title="Global Mangrove Watch 2020",
+            sources=(HttpSource(url="https://example.com/mangroves.zip", files=("*.shp",)),),
+            max_zoom=12,
+            publish_to=("mapbox",),
+        ),
+    ],
+)
+
+for result in project.run():  # build, then publish, every layer that publishes somewhere
+    if result.failed:
+        print(result.layer, result.step, result.error)
+
+for status in project.status():
+    print(status)
+```
+
+`run` returns one `StepResult` per layer and step, and per destination when publishing
+(`layer`, `step`, `outcome`, `destination`, `detail`, `error`). A failing layer does not stop
+the others: it comes back as a result with `outcome == "failed"`. A layer that is already
+built and a build already published are skipped; `refresh=True` downloads the sources again
+and publishes the result, and `force=True` builds and publishes even if nothing changed.
+`run` also takes `names=` to pick layers, `to=` to pick a destination and `publish=False` to
+only build.
+
+`status` reads what is on disk and touches no network destination. Before anything is built,
+it prints:
+
+```text
+LayerStatus(name='mangroves', title='Global Mangrove Watch 2020', state='not built', published={'mapbox': 'not published'}, detail=None)
+```
 
 ## Development
 
