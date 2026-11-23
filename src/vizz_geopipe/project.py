@@ -53,6 +53,27 @@ class StepResult:
 
 
 @dataclass(frozen=True, kw_only=True)
+class LayerStatus:
+    """Where one layer stands: built or not, and published or not.
+
+    Attributes:
+        name: The layer's name.
+        title: The layer's title.
+        state: ``not built``, ``built``, ``stale`` (the sources changed since the build),
+            or ``unknown`` (the sources could not be checked).
+        published: For each destination the layer publishes to, whether the build on disk is
+            ``published`` there, ``outdated`` (another build is) or ``not published``.
+        detail: Why the state is ``unknown``.
+    """
+
+    name: str
+    title: str
+    state: Literal["not built", "built", "stale", "unknown"]
+    published: Mapping[str, Literal["published", "outdated", "not published"]]
+    detail: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class Project:
     """The layers of a repository, the destinations they publish to, and where data lives.
 
@@ -275,3 +296,77 @@ class Project:
                         )
                     )
         return results
+
+    def run(
+        self,
+        names: Sequence[str] | None = None,
+        *,
+        to: str | None = None,
+        refresh: bool = False,
+        force: bool = False,
+        publish: bool = True,
+    ) -> list[StepResult]:
+        """Build the layers, then publish the ones that built.
+
+        Args:
+            names: The layers to run, or ``None`` for all (with ``to`` or ``publish``, all
+                that publish, to ``to`` when given).
+            to: Publish only to this destination.
+            refresh: Download the sources again.
+            force: Build and publish even if nothing changed.
+            publish: Whether to publish after building.
+
+        Returns:
+            The build results, then the publish results.
+
+        Raises:
+            ValueError: If a name or ``to`` is unknown, or a layer asked for by name has
+                nothing to publish (before any work).
+        """
+        selected = [layer.name for layer in self._select(names, to=to, publishing=publish)]
+        results = self.build(selected, refresh=refresh, force=force)
+        if publish:
+            built = [r.layer for r in results if not r.failed]
+            if built:
+                results += self.publish(built, to=to, force=force)
+        return results
+
+    def status(self, names: Sequence[str] | None = None) -> list[LayerStatus]:
+        """Say where each layer stands, without building or publishing anything.
+
+        Args:
+            names: The layers to report, or ``None`` for all of them.
+
+        Returns:
+            One status per layer, in declaration order.
+
+        Raises:
+            ValueError: If a name is unknown.
+        """
+        statuses = []
+        for layer in self._select(names):
+            artifact = layer.artifact(self.workdir)
+            build = read_build(artifact.parent) if artifact.is_file() else None
+            state, detail = "not built", None
+            if build is not None:
+                try:
+                    state = "built" if layer.fingerprint() == build else "stale"
+                except SourceError as error:
+                    state, detail = "unknown", str(error)
+            published = {}
+            for key in layer.publish_to:
+                recorded = read_published(artifact.parent, key)
+                if recorded is None or build is None:
+                    published[key] = "not published"
+                else:
+                    published[key] = "published" if recorded == build else "outdated"
+            statuses.append(
+                LayerStatus(
+                    name=layer.name,
+                    title=layer.title,
+                    state=state,
+                    published=published,
+                    detail=detail,
+                )
+            )
+        return statuses
