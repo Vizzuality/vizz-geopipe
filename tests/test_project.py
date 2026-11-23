@@ -580,3 +580,85 @@ def test_status_shows_unknown_when_the_fingerprint_fails(tmp_path, layer):
     assert first_status.detail
     assert first_status.published == {"d": "published"}
     assert second_status.state == "built"
+
+
+def test_run_with_refresh_publishes_again(tmp_path, layer):
+    destination = FakeDestination()
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("d",))],
+        destinations={"d": destination},
+    )
+    project.run()
+
+    results = project.run(refresh=True)
+
+    assert [r.outcome for r in results] == ["built", "published"]
+    assert len(destination.uploads) == 2
+
+
+def test_a_single_name_can_be_given_as_a_string(tmp_path, layer):
+    project = Project(data_dir=tmp_path / "data", layers=[layer("mangrove"), layer("mangroves")])
+
+    results = project.build("mangroves")
+
+    assert [(r.layer, r.outcome) for r in results] == [("mangroves", "built")]
+
+
+def test_data_dir_can_be_a_string(tmp_path, layer):
+    project = Project(data_dir=str(tmp_path / "data"), layers=[layer("x")])
+
+    results = project.build()
+
+    assert [r.outcome for r in results] == ["built"]
+
+
+def test_a_bug_in_a_destination_propagates(tmp_path, layer):
+    class Buggy(FakeDestination):
+        def _upload(self, artifact, name, title):
+            raise RuntimeError("bug")
+
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("x", publish_to=("d",))],
+        destinations={"d": Buggy()},
+    )
+    project.build()
+
+    with pytest.raises(RuntimeError, match="bug"):
+        project.publish()
+
+
+def test_a_deleted_artifact_is_not_built(tmp_path, layer):
+    x = layer("x", publish_to=("d",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"d": FakeDestination()})
+    project.build()
+    x.artifact(project.workdir).unlink()
+
+    results = project.publish()
+
+    assert [r.outcome for r in results] == ["failed"]
+    assert "geopipe build" in results[0].detail
+
+
+def test_run_leaves_out_layers_that_publish_nowhere(tmp_path, layer):
+    project = Project(
+        data_dir=tmp_path / "data",
+        layers=[layer("a", publish_to=("d",)), layer("b")],
+        destinations={"d": FakeDestination()},
+    )
+
+    results = project.run()
+
+    assert {r.layer for r in results} == {"a"}
+
+
+def test_status_ignores_a_publish_record_without_a_build(tmp_path, layer):
+    x = layer("x", publish_to=("d",))
+    project = Project(data_dir=tmp_path / "data", layers=[x], destinations={"d": FakeDestination()})
+    project.run()
+    x.artifact(project.workdir).unlink()
+
+    (status,) = project.status()
+
+    assert (status.state, status.published) == ("not built", {"d": "not published"})

@@ -110,10 +110,13 @@ def mbtiles(tmp_path) -> Path:
 
 
 def test_creating_reads_no_environment(monkeypatch):
-    monkeypatch.delenv("MAPBOX_USER", raising=False)
-    monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
+    monkeypatch.setenv("MAPBOX_USER", "vizz")
+    monkeypatch.setenv("MAPBOX_TOKEN", TOKEN)
 
-    MapboxDestination()
+    destination = MapboxDestination()
+
+    assert destination.username is None
+    assert destination.token is None
 
 
 def test_publishing_reads_the_environment(monkeypatch, mapbox, mbtiles):

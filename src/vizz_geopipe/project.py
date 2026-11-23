@@ -86,7 +86,7 @@ class Project:
         destinations: The destinations by name, as ``Layer.publish_to`` refers to them.
     """
 
-    data_dir: Path
+    data_dir: Path | str
     layers: Sequence[Layer]
     destinations: Mapping[str, Destination] = field(default_factory=dict)
 
@@ -126,7 +126,7 @@ class Project:
     @property
     def workdir(self) -> Workdir:
         """The project's data folders."""
-        return Workdir(self.data_dir)
+        return Workdir(Path(self.data_dir))
 
     def _select(
         self, names: Sequence[str] | None, *, to: str | None = None, publishing: bool = False
@@ -144,6 +144,8 @@ class Project:
             ValueError: If a name or ``to`` is unknown, or a layer asked for by name has
                 nothing to publish.
         """
+        if isinstance(names, str):
+            names = [names]
         known = {layer.name for layer in self.layers}
         unknown = sorted(set(names or ()) - known)
         if unknown:
@@ -312,7 +314,8 @@ class Project:
             names: The layers to run, or ``None`` for all (with ``to`` or ``publish``, all
                 that publish, to ``to`` when given).
             to: Publish only to this destination.
-            refresh: Download the sources again.
+            refresh: Download the sources again, and publish the result even if the
+                destination has this build already.
             force: Build and publish even if nothing changed.
             publish: Whether to publish after building.
 
@@ -328,7 +331,7 @@ class Project:
         if publish:
             built = [r.layer for r in results if not r.failed]
             if built:
-                results += self.publish(built, to=to, force=force)
+                results += self.publish(built, to=to, force=force or refresh)
         return results
 
     def status(self, names: Sequence[str] | None = None) -> list[LayerStatus]:
