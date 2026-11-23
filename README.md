@@ -105,15 +105,16 @@ from vizz_geopipe.destinations import S3Destination
 
 mbtiles = Path("data/processed/mangroves/mangroves.mbtiles")
 
-mapbox = MapboxDestination.from_env()
+mapbox = MapboxDestination()
 mapbox.publish(mbtiles, name="mangroves", title="Mangroves")  # "<user>.mangroves"
 
 s3 = S3Destination(bucket="my-project-layers", prefix="layers/v1")
 s3.publish(mbtiles, name="mangroves")  # "s3://my-project-layers/layers/v1/mangroves.mbtiles"
 ```
 
-- `MapboxDestination.from_env()` reads `MAPBOX_USER` and `MAPBOX_TOKEN`. It publishes
-  MBTiles only, and returns the tileset id once Mapbox has finished processing it.
+- `MapboxDestination()` reads `MAPBOX_USER` and `MAPBOX_TOKEN` when a file is published (or
+  take `username=` and `token=`). It publishes MBTiles only, and returns the tileset id once
+  Mapbox has finished processing it.
 - `S3Destination` and `GCSDestination` take `bucket`, `prefix` and an optional
   `public_base_url`; with it, `publish` returns the file's public URL instead of its
   `s3://` or `gs://` URI. They hold no credentials: S3 uses boto3's usual chain

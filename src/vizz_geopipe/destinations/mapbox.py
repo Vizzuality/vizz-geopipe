@@ -75,30 +75,20 @@ class MapboxDestination(Destination):
     """A Mapbox account: each MBTiles file becomes the tileset ``<username>.<name>``.
 
     Publishing replaces an existing tileset of the same name, and waits until Mapbox has
-    processed it.
+    processed it. The credentials, when not given, are read from ``MAPBOX_USER`` and
+    ``MAPBOX_TOKEN`` when a file is published, so a project can declare
+    ``MapboxDestination()`` on a machine without them.
 
     Attributes:
-        username: The Mapbox account name.
-        token: A secret token with the ``uploads:write`` scope. Never shown in ``repr``,
-            logs or errors.
+        username: The Mapbox account name. Defaults to ``MAPBOX_USER``.
+        token: A secret token with the ``uploads:write`` scope. Defaults to
+            ``MAPBOX_TOKEN``. Never shown in ``repr``, logs or errors.
     """
 
     suffixes: ClassVar[frozenset[str] | None] = frozenset({".mbtiles"})
 
-    username: str
-    token: str = field(repr=False)
-
-    @classmethod
-    def from_env(cls) -> "MapboxDestination":
-        """Read the account from the ``MAPBOX_USER`` and ``MAPBOX_TOKEN`` variables.
-
-        Raises:
-            ValueError: If either variable is missing or empty.
-        """
-        values = {key: os.environ.get(key) for key in ("MAPBOX_USER", "MAPBOX_TOKEN")}
-        if missing := [key for key, value in values.items() if not value]:
-            raise ValueError(f"set {' and '.join(missing)} to publish to Mapbox")
-        return cls(username=values["MAPBOX_USER"], token=values["MAPBOX_TOKEN"])
+    username: str | None = None
+    token: str | None = field(default=None, repr=False)
 
     def validate(self, name: str) -> None:
         """Check that ``name`` is a valid tileset name (without the ``username.``).
@@ -113,14 +103,22 @@ class MapboxDestination(Destination):
 
     def _upload(self, artifact: Path, name: str, title: str) -> str:
         """Stage ``artifact`` in Mapbox's bucket, create the tileset and wait for it."""
-        tileset = f"{self.username}.{name}"
+        username = self.username or os.environ.get("MAPBOX_USER")
+        token = self.token or os.environ.get("MAPBOX_TOKEN")
+        if missing := [
+            key for key, value in (("MAPBOX_USER", username), ("MAPBOX_TOKEN", token)) if not value
+        ]:
+            raise PublishError(
+                type(self).__name__, f"set {' and '.join(missing)} to publish to Mapbox"
+            )
+        tileset = f"{username}.{name}"
         size = artifact.stat().st_size
         if size > MAX_UPLOAD_BYTES:
             raise PublishError(
                 type(self).__name__,
                 f"{artifact} is {size} bytes, over Mapbox's limit of 25 GB",
             )
-        credentials = self._request("POST", f"{self.username}/credentials")
+        credentials = self._request("POST", f"{username}/credentials", token)
         session = boto3.Session(
             aws_access_key_id=credentials["accessKeyId"],
             aws_secret_access_key=credentials["secretAccessKey"],
@@ -131,13 +129,14 @@ class MapboxDestination(Destination):
         display_name = _display_name(title) or name  # a title of only punctuation
         upload = self._request(
             "POST",
-            self.username,
+            username,
+            token,
             json={"url": credentials["url"], "tileset": tileset, "name": display_name},
         )
-        self._wait(tileset, upload["id"])
+        self._wait(tileset, upload["id"], username, token)
         return tileset
 
-    def _wait(self, tileset: str, upload_id: str) -> None:
+    def _wait(self, tileset: str, upload_id: str, username: str, token: str) -> None:
         """Poll the upload until Mapbox has processed it.
 
         Raises:
@@ -146,7 +145,7 @@ class MapboxDestination(Destination):
         """
         deadline = time.monotonic() + TIMEOUT_SECONDS
         while True:
-            status = self._request("GET", f"{self.username}/{upload_id}")
+            status = self._request("GET", f"{username}/{upload_id}", token)
             if status["error"]:
                 raise PublishError(
                     type(self).__name__, f"Mapbox could not process {tileset}: {status['error']}"
@@ -161,7 +160,7 @@ class MapboxDestination(Destination):
                 )
             time.sleep(POLL_SECONDS)
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict:
+    def _request(self, method: str, path: str, token: str, **kwargs: Any) -> dict:
         """Call the Uploads API and return its JSON answer.
 
         The token goes in the URL (Mapbox takes it there), so the text of a ``requests``
@@ -175,7 +174,7 @@ class MapboxDestination(Destination):
             response = requests.request(
                 method,
                 f"{UPLOADS_API}/{path}",
-                params={"access_token": self.token},
+                params={"access_token": token},
                 timeout=REQUEST_TIMEOUT,
                 **kwargs,
             )

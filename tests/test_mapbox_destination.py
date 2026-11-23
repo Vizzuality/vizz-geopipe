@@ -109,22 +109,49 @@ def mbtiles(tmp_path) -> Path:
     return path
 
 
-def test_from_env_reads_the_user_and_token(monkeypatch):
-    monkeypatch.setenv("MAPBOX_USER", "vizz")
-    monkeypatch.setenv("MAPBOX_TOKEN", TOKEN)
-
-    destination = MapboxDestination.from_env()
-
-    assert destination.username == "vizz"
-    assert destination.token == TOKEN
-
-
-def test_from_env_names_the_missing_variables(monkeypatch):
+def test_creating_reads_no_environment(monkeypatch):
     monkeypatch.delenv("MAPBOX_USER", raising=False)
     monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
 
-    with pytest.raises(ValueError, match="MAPBOX_USER and MAPBOX_TOKEN"):
-        MapboxDestination.from_env()
+    MapboxDestination()
+
+
+def test_publishing_reads_the_environment(monkeypatch, mapbox, mbtiles):
+    monkeypatch.setenv("MAPBOX_USER", "vizz")
+    monkeypatch.setenv("MAPBOX_TOKEN", TOKEN)
+
+    result = MapboxDestination().publish(mbtiles, name="mangroves")
+
+    assert result == "vizz.mangroves"
+    assert {params["access_token"] for _, _, params, _ in mapbox.calls} == {TOKEN}
+
+
+def test_given_values_win_over_the_environment(monkeypatch, mapbox, destination, mbtiles):
+    monkeypatch.setenv("MAPBOX_USER", "other")
+
+    assert destination.publish(mbtiles, name="mangroves") == "vizz.mangroves"
+
+
+def test_missing_variables_raise_publish_error_naming_them(monkeypatch, mapbox, mbtiles):
+    monkeypatch.delenv("MAPBOX_USER", raising=False)
+    monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
+
+    with pytest.raises(PublishError, match="MAPBOX_USER and MAPBOX_TOKEN"):
+        MapboxDestination().publish(mbtiles, name="mangroves")
+
+    assert mapbox.calls == []
+
+
+def test_the_token_from_the_environment_is_never_shown(monkeypatch, mapbox, mbtiles, caplog):
+    monkeypatch.setenv("MAPBOX_USER", "vizz")
+    monkeypatch.setenv("MAPBOX_TOKEN", TOKEN)
+    destination = MapboxDestination()
+
+    with caplog.at_level(logging.DEBUG):
+        destination.publish(mbtiles, name="mangroves")
+
+    assert TOKEN not in repr(destination)
+    assert TOKEN not in caplog.text
 
 
 def test_the_token_is_not_in_the_repr(destination):
